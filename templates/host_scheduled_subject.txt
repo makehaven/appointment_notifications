@@ -1,0 +1,2 @@
+New Appointment with @scheduled_by on @date at @time.
+

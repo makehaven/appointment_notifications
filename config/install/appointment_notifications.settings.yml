@@ -1,0 +1,12 @@
+appointment_notifications_settings:
+  email_subject_created: 'New Appointment Created'
+  email_body_created: 'An appointment has been created with @with on @date.'
+  email_subject_canceled: 'Appointment Canceled'
+  email_body_canceled: 'The appointment with @with on @date has been canceled.'
+  email_sender: 'no-reply@example.com'
+  email_subject_member_scheduled: 'Appointment Scheduled'
+  email_body_member_scheduled: 'Your appointment is scheduled with @with on @date.'
+  email_subject_host_scheduled: 'You have been scheduled for an appointment'
+  email_body_host_scheduled: 'You have an appointment with @who on @date.'
+  staff_email: 'staff@example.com'
+  development_mode: false

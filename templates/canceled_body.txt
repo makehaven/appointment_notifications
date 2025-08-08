@@ -1,0 +1,11 @@
+Dear @recipient_name,
+
+The appointment titled "@title" scheduled for @date has been canceled.
+
+Please feel free to reschedule another appointment at your convenience.
+
+If you have any questions, please reach out to us.
+
+Best regards,
+The MakeHaven Team
+

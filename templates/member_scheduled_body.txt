@@ -1,0 +1,29 @@
+Dear @recipient_name,
+
+Your appointment with @volunteer_name has been successfully scheduled. Here are the details:
+
+**Appointment:** @title
+**Date:** @date
+**Purpose:** @purpose
+
+start-if@checkout_instructions
+**Badges:** @badges
+Remember to be prepared for your appointment!
+
+To complete a badge checkout, you must have the badge listed as pending on your profile (https://www.makehaven.org/user) – if it’s not there, be sure to go to the tool page, learn from the complete video, and take the quiz. You must get 100% on the quiz, so retake if you have errors.
+
+We recommend reviewing the video with 24 hours of your appointment to be sure you are ready to go.
+end-if@checkout_instructions
+
+If you have made this appointment less than 4 hours before the start time, please also Slack the facilitator to ensure they saw the appointment request. 
+**Facilitator Slack:** @host_slack_link 
+
+You can view your upcoming appointments here: @link
+
+Once the session is complete, we kindly ask you to provide your feedback here: @feedback_link
+
+Thank you for your participation. We look forward to seeing you soon!
+
+Best regards,
+The MakeHaven Team
+

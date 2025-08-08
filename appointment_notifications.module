@@ -1,0 +1,385 @@
+<?php
+
+use Drupal\node\Entity\Node;
+use Drupal\Core\Mail\MailManagerInterface;
+use Drupal\Core\Url;
+
+/**
+ * Implements hook_entity_insert().
+ */
+function appointment_notifications_entity_insert(Drupal\Core\Entity\EntityInterface $entity) {
+  // Ensure the entity is of type 'node' and the content type is 'appointment'.
+  if ($entity instanceof \Drupal\node\Entity\Node && $entity->bundle() === 'appointment') {
+    // Send email to the attending member (author).
+    _appointment_notifications_send_email($entity, 'member_scheduled');
+
+    // Send email to the host volunteer.
+    _appointment_notifications_send_email($entity, 'host_scheduled');
+  }
+}
+
+/**
+ * Implements hook_entity_update().
+ */
+function appointment_notifications_entity_update(Drupal\Core\Entity\EntityInterface $entity) {
+  // Ensure the entity is of type 'node' and the content type is 'appointment'.
+  if ($entity instanceof \Drupal\node\Entity\Node && $entity->bundle() === 'appointment') {
+    
+    // Check if the original entity exists (before the update).
+    if ($entity->original) {
+      // Get the original (old) value of the appointment status field.
+      $original_status = $entity->original->get('field_appointment_status')->value;
+  
+      // Get the current (new) value of the appointment status field.
+      $current_status = $entity->get('field_appointment_status')->value;
+  
+      // Check if the status has changed from "scheduled" to "canceled".
+      if ($original_status === 'scheduled' && $current_status === 'canceled') {
+        // Send the cancellation email to both host and member.
+        _appointment_notifications_send_email($entity, 'canceled');
+      }
+  
+      // Get the original (old) value of the appointment result field.
+      $original_result = $entity->original->get('field_appointment_result')->value;
+  
+      // Get the current (new) value of the appointment result field.
+      $current_result = $entity->get('field_appointment_result')->value;
+  
+      // Define problem states.
+      $problem_states = ['volunteer_absent', 'met_unsuccessful'];
+  
+      // Check if the result field has changed from a non-problem state to a problem state.
+      if (!in_array($original_result, $problem_states) && in_array($current_result, $problem_states)) {
+        // Send the problem notification email only if the state has changed to a problem state.
+        _appointment_notifications_send_problem_notice($entity);
+      }
+    }
+  }
+}
+
+/**
+ * Helper function to send emails.
+ */
+function _process_template_condition($template, $condition, $include_content) {
+  $pattern = "/start-if@$condition(.*?)end-if@$condition/s";
+  if ($include_content) {
+    // If the condition is true, replace the entire block with its content.
+    return preg_replace($pattern, '$1', $template);
+  } else {
+    // If the condition is false, remove the entire block.
+    return preg_replace($pattern, '', $template);
+  }
+}
+
+
+function _appointment_notifications_send_email(Node $node, $action) {
+  $mailManager = \Drupal::service('plugin.manager.mail');
+  $config = \Drupal::config('appointment_notifications.settings');
+  $module = 'appointment_notifications';
+  $key = 'appointment_' . $action;
+  $language = \Drupal::currentUser()->getPreferredLangcode();
+  $sender = $config->get('email_sender');
+  $development_mode = $config->get('development_mode');
+
+  // Slack Team ID
+  $slack_team_id = 'T02DJKD4B'; // Replace with your actual Slack Team ID
+
+  // Prepare badge names.
+  $badge_names = [];
+  if ($node->hasField('field_appointment_badges') && !$node->get('field_appointment_badges')->isEmpty()) {
+    foreach ($node->get('field_appointment_badges')->referencedEntities() as $badge) {
+      $badge_names[] = $badge->label();
+    }
+  }
+
+  // Format the appointment date without time zone conversion.
+  $raw_date = $node->get('field_appointment_date')->value ?? '';
+  $formatted_date = 'No date provided';
+  if (!empty($raw_date)) {
+    $date = new \DateTime($raw_date);
+    $formatted_date = $date->format('l, F j, Y');
+  }
+
+  // Define $site_timezone before using it in time calculations.
+  $site_timezone = \Drupal::config('system.date')->get('timezone.default') ?: 'UTC';
+
+  // Calculate the appointment time.
+  $appointment_time = 'Time not specified';
+  $host_start_time_raw = $node->hasField('field_host_start_time') && !$node->get('field_host_start_time')->isEmpty()
+    ? $node->get('field_host_start_time')->value
+    : \Drupal::request()->query->get('start_time');
+
+  if (!empty($host_start_time_raw) && $node->hasField('field_appointment_slot') && !$node->get('field_appointment_slot')->isEmpty()) {
+    $selected_slots = $node->get('field_appointment_slot')->getValue();
+    $slot_keys = array_column($selected_slots, 'value');
+    $slot_offsets = [
+      '1'   => 0,
+      '1-5' => 30,
+      '2'   => 60,
+      '2-5' => 90,
+      '3'   => 120,
+      '3-5' => 150,
+    ];
+
+    $first_slot = reset($slot_keys);
+    $offset_minutes = $slot_offsets[$first_slot] ?? null;
+
+    if ($offset_minutes !== null) {
+      try {
+        // Parse the start time as site timezone, not UTC
+        $start_time = new \DateTime($host_start_time_raw, new \DateTimeZone($site_timezone));
+        $start_time->modify("+$offset_minutes minutes");
+        $appointment_time = $start_time->format('g:i A');
+      } catch (\Exception $e) {
+        \Drupal::logger('appointment_notifications')->error('Error calculating appointment time: @message', ['@message' => $e->getMessage()]);
+      }
+    }
+  }
+
+  /**
+   * Helper function to load the user's profile and get a field value.
+   */
+  if (!function_exists('_get_profile_field_value')) {
+    function _get_profile_field_value($user, $profile_type, $field_name) {
+      $profile = \Drupal::entityTypeManager()
+        ->getStorage('profile')
+        ->loadByProperties(['uid' => $user->id(), 'type' => $profile_type]);
+
+      if (!empty($profile)) {
+        $profile_entity = reset($profile); // Get the first profile entity.
+        if ($profile_entity->hasField($field_name) && !$profile_entity->get($field_name)->isEmpty()) {
+          return $profile_entity->get($field_name)->value;
+        }
+      }
+      return 'Not available'; // Default if field is missing or empty.
+    }
+  }
+
+  // Prepare the member's email, name, and Slack ID.
+  $member_user = $node->getOwner();
+  $member_email = $member_user->getEmail() ?? 'No email available';
+  $member_name = $member_user->getDisplayName() ?? 'Not specified';
+  $member_slack_id = _get_profile_field_value($member_user, 'main', 'field_member_slack_id_number');
+  $member_slack_link = $member_slack_id && $member_slack_id !== 'Not available'
+      ? 'https://makehaven.slack.com/team/' . $member_slack_id
+      : 'Not available';
+
+  // Prepare the host's email, name, and Slack ID.
+  $host_user = $node->hasField('field_appointment_host') && !$node->get('field_appointment_host')->isEmpty()
+      ? $node->get('field_appointment_host')->entity
+      : null;
+
+  $host_email = $host_user ? $host_user->getEmail() : 'No email available';
+  $host_name = $host_user ? $host_user->getDisplayName() : 'Not specified';
+  $host_slack_id = $host_user ? _get_profile_field_value($host_user, 'main', 'field_member_slack_id_number') : 'Not available';
+  $host_slack_link = $host_slack_id !== 'Not available'
+      ? 'https://makehaven.slack.com/team/' . $host_slack_id
+      : 'Not available';
+
+  // [New Code] Determine the appointment purpose.
+  $purpose = $node->get('field_appointment_purpose')->value ?? 'No purpose provided';
+
+  // [New Code] Determine if the 'checkout_instructions' should be included.
+  $include_checkout_instructions = ($purpose === 'checkout');
+
+  // Prepare replacements.
+  $replacements = [
+    '@title' => $node->getTitle(),
+    '@date' => $formatted_date,
+    '@time' => $appointment_time,
+    '@purpose' => $purpose,
+    '@feedback' => $node->get('field_appointment_feedback')->value ?? 'No feedback available',
+    '@result' => $node->get('field_appointment_result')->value ?? 'No result provided',
+    '@link' => Url::fromRoute('entity.node.canonical', ['node' => $node->id()], ['absolute' => TRUE])->toString(),
+    '@feedback_link' => 'https://www.makehaven.org/appointment/feedback',
+    '@scheduled_by' => $member_name,
+    '@badges' => !empty($badge_names) ? implode(', ', $badge_names) : 'None selected',
+    '@note' => $node->get('field_appointment_note')->value ?? 'No additional notes',
+    '@volunteer_name' => $host_name ?? 'Not specified',
+    '@recipient_name' => $member_name ?? 'Not specified',
+    '@member_email' => $member_email,
+    '@member_slack_id' => $member_slack_id,
+    '@member_slack_link' => $member_slack_link,
+    '@host_email' => $host_email,
+    '@host_slack_id' => $host_slack_id,
+    '@host_slack_link' => $host_slack_link,
+  ];
+
+  if ($action === 'member_scheduled' || $action === 'canceled') {
+    $replacements['@recipient_name'] = $member_name;
+  }
+
+  // [New Code] Initialize '@volunteer_name' if not set.
+  $replacements['@volunteer_name'] = $replacements['@volunteer_name'] ?? 'Not specified';
+
+  // Load templates.
+  $subject_template = $config->get("email_subject_$action") ?? 'Appointment Notification';
+  $body_template = $config->get("email_body_$action") ?? 'Default email body content';
+
+  // [New Code] Process conditional blocks in the template.
+  $body_template = _process_template_condition($body_template, 'checkout_instructions', $include_checkout_instructions);
+
+  // Replace tokens.
+  $subject = strtr($subject_template, $replacements);
+  $body = strtr($body_template, $replacements);
+
+  // Ensure subject and body are not empty.
+  $subject = trim($subject) ?: 'Appointment Notification';
+  $body = trim($body) ?: 'This is a fallback email body since the template content was empty.';
+
+  // Determine recipients.
+  $to = [];
+  if ($action === 'member_scheduled' || $action === 'canceled') {
+    $to[] = $member_email;
+  }
+  if ($action === 'host_scheduled' || $action === 'canceled') {
+    if ($host_user) {
+      $to[] = $host_user->getEmail();
+    }
+  }
+
+  // Handle `cc` for canceled actions.
+  $cc = [];
+  if ($action === 'canceled') {
+    $cc[] = $member_email;
+  }
+
+  // Check recipients.
+  if (empty($to)) {
+    \Drupal::logger('appointment_notifications')->warning('No recipients found for action @action.', ['@action' => $action]);
+    return;
+  }
+
+  if ($development_mode) {
+    \Drupal::logger('appointment_notifications')->notice('Development Mode: Email to @recipients with subject "@subject".', [
+      '@recipients' => implode(', ', $to),
+      '@subject' => $subject,
+    ]);
+  } else {
+    foreach ($to as $recipient) {
+      $params = ['subject' => $subject, 'message' => $body, 'cc' => implode(', ', $cc)];
+      $result = $mailManager->mail($module, $key, $recipient, $language, $params, $sender);
+      if ($result['result'] !== true) {
+        \Drupal::logger('appointment_notifications')->error('Failed to send email to @recipient for action @action', [
+          '@recipient' => $recipient, '@action' => $action,
+        ]);
+      }
+    }
+  }
+}
+
+
+/**
+ * Implements hook_mail().
+ */
+function appointment_notifications_mail($key, &$message, $params) {
+  $module = 'appointment_notifications';
+
+  switch ($key) {
+    case 'appointment_member_scheduled':
+    case 'appointment_host_scheduled':
+    case 'appointment_canceled':
+    case 'appointment_problem_notice':
+      // Set the email subject.
+      $message['subject'] = $params['subject'];
+
+      // Set the email body.
+      $message['body'][] = $params['message'];
+
+      // Add CC headers if provided.
+      if (!empty($params['cc'])) {
+        $message['headers']['Cc'] = $params['cc'];
+      }
+
+      break;
+
+    default:
+      // Handle other cases or set default behavior.
+      \Drupal::logger($module)->warning('No email implementation for key: @key', ['@key' => $key]);
+      break;
+  }
+}
+
+
+
+
+
+/**
+ * Helper function to send a problem notice to staff.
+ */
+function _appointment_notifications_send_problem_notice(Node $node) {
+  $mailManager = \Drupal::service('plugin.manager.mail');
+  $config = \Drupal::config('appointment_notifications_settings');
+  $module = 'appointment_notifications';
+  $key = 'appointment_problem_notice';
+  $language = \Drupal::currentUser()->getPreferredLangcode();
+  $sender = $config->get('email_sender');
+  $to = $config->get('staff_email'); // Get the staff email from configuration.
+  $development_mode = $config->get('development_mode');
+
+  // Prepare replacement patterns.
+  $replacements = [
+    '@title' => $node->getTitle(),
+    '@date' => $node->get('field_appointment_date')->value,
+    '@result' => $node->get('field_appointment_result')->value,
+    '@feedback' => $node->get('field_appointment_feedback')->value,
+    '@author_name' => $node->getOwner()->getDisplayName(), // Name of the person who had the problem
+    '@volunteer_name' => '', // Placeholder for volunteer name
+    '@link' => Url::fromRoute('entity.node.canonical', ['node' => $node->id()], ['absolute' => TRUE])->toString(),
+  ];
+
+// Initialize volunteer/host name as 'Not specified' by default.
+$volunteer_name = 'Not specified';
+
+// Check if the field_appointment_host field exists and has a value.
+if ($node->hasField('field_appointment_host') && !$node->get('field_appointment_host')->isEmpty()) {
+  $host_user = $node->get('field_appointment_host')->entity;
+
+  if ($host_user) {
+    $volunteer_name = $host_user->getDisplayName();
+    \Drupal::logger('appointment_notifications')->debug('Host user found: @name', ['@name' => $volunteer_name]);
+  } else {
+    \Drupal::logger('appointment_notifications')->warning('Host user entity is not loaded or is empty.');
+  }
+} else {
+  \Drupal::logger('appointment_notifications')->warning('field_appointment_host is missing or empty.');
+}
+
+// Assign the volunteer name to the replacement array.
+$replacements['@volunteer_name'] = $volunteer_name;
+
+  // Compose the email.
+  $subject = t('Issue Reported During Appointment - @title', ['@title' => $node->getTitle()]);
+  $body = t('An issue has been reported during an appointment. Details are as follows:') . "\n\n";
+  $body .= t('**Appointment:** @title', $replacements) . "\n";
+  $body .= t('**Date:** @date', $replacements) . "\n";
+  $body .= t('**Reported By:** @author_name', $replacements) . "\n";
+  $body .= t('**Volunteer:** @volunteer_name', $replacements) . "\n";
+  $body .= t('**Reported Issue:** @result', $replacements) . "\n";
+  $body .= t('**Feedback Provided:** @feedback', $replacements) . "\n";
+  $body .= t('**View Appointment:** @link', $replacements) . "\n";
+
+  if ($development_mode) {
+    // Log or display the email content instead of sending.
+    \Drupal::logger('appointment_notifications')->notice('Development Mode: Problem email to be sent to @recipients with subject "@subject" and message "@message".', [
+      '@recipients' => $to,
+      '@subject' => $subject,
+      '@message' => $body,
+    ]);
+
+    // Display the message on the screen (useful during development).
+    \Drupal::messenger()->addMessage(t('Development Mode: Problem email to be sent to @recipients with subject "@subject" and message "@message".', [
+      '@recipients' => $to,
+      '@subject' => $subject,
+      '@message' => nl2br($body),
+    ]));
+  } else {
+    $params = ['subject' => $subject, 'message' => $body];
+    $result = $mailManager->mail($module, $key, $to, $language, $params, $sender);
+
+    if (!$result['result']) {
+      \Drupal::logger('appointment_notifications')->error('Failed to send problem email to @recipient', ['@recipient' => $to]);
+    }
+  }
+}
+

@@ -1,0 +1,6 @@
+appointment_notifications.admin_settings:
+  title: 'Appointment Notifications Settings'
+  description: 'Configure the email notifications for appointments.'
+  parent: system.admin_config_services
+  route_name: appointment_notifications.settings_form
+  weight: 100

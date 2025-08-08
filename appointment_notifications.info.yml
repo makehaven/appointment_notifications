@@ -1,0 +1,7 @@
+name: 'Appointment Notifications'
+type: module
+description: 'Sends email notifications to the author and user when an appointment is created or canceled.'
+core_version_requirement: ^10
+package: Custom
+dependencies:
+  - drupal:node

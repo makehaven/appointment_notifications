@@ -1,0 +1,21 @@
+Dear @recipient_name,
+
+A new appointment has been scheduled with you. Here are the details:
+
+**Date:** @date at @time.
+**Scheduled By:** @scheduled_by
+**Member's Email:** @member_email
+**Member Slack:** @member_slack_link  
+
+**Purpose:** @purpose
+**Badges:** @badges
+**Notes:** @note
+
+You can view the appointment details here: @link
+
+Please prepare accordingly. If you have any questions, feel free to reach out.
+
+Best regards,
+The MakeHaven Team
+
+

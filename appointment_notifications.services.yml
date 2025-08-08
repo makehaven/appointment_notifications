@@ -1,0 +1,4 @@
+services:
+  appointment_notifications.mail_manager:
+    class: Drupal\Core\Mail\MailManager
+    arguments: ['@module_handler', '@theme.manager', '@token']

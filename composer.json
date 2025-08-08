@@ -1,0 +1,6 @@
+{
+    "name": "makehaven/appointment_notifications",
+    "type": "drupal-custom-module",
+    "description": "Sends email notifications to the author and user when an appointment is created or canceled.",
+    "license": "GPL-2.0-or-later"
+}
