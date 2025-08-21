@@ -1,13 +1,87 @@
-email_subject_canceled: 'Appointment Canceled'
-email_body_canceled: 'The appointment with @with on @date has been canceled.'
-email_sender: 'no-reply@example.com'
-email_subject_member_scheduled: 'Appointment Scheduled'
-email_body_member_scheduled: 'Your appointment is scheduled with @with on @date.'
-email_subject_host_scheduled: 'You have been scheduled for an appointment'
-email_body_host_scheduled: 'You have an appointment with @who on @date.'
-staff_email: 'staff@example.com'
+# Sender & staff
+email_sender: 'no-reply@makehaven.org'
+staff_email: 'staff@makehaven.org'
+
+# Problem notice (internal alert to staff)
+email_subject_problem_notice: 'Issue Reported During Appointment – @title'
+email_body_problem_notice: |
+  An issue has been reported during an appointment. Details:
+
+  **Appointment:** @title
+  **Date:** @date at @time
+  **Reported By:** @author_name
+  **Volunteer:** @volunteer_name
+  **Result/Status:** @result
+  **Feedback Provided:** @feedback
+
+  View appointment: @link
+
+# Member scheduled
+email_subject_member_scheduled: 'Appointment Scheduled: @title at @time'
+email_body_member_scheduled: |
+  Dear @recipient_name,
+
+  Your appointment with @volunteer_name has been scheduled.
+
+  **Appointment:** @title
+  **Date:** @date at @time
+  **Purpose:** @purpose
+  **Badges:** @badges
+
+  View your appointment: @link
+
+  After the session, please share feedback: @feedback_link
+
+  Best regards,
+  The MakeHaven Team
+
+# Host scheduled
+email_subject_host_scheduled: 'New Appointment with @scheduled_by on @date at @time'
+email_body_host_scheduled: |
+  Dear @recipient_name,
+
+  A new appointment has been scheduled with you.
+
+  **Date:** @date at @time
+  **Scheduled By:** @scheduled_by
+  **Member Email:** @member_email
+
+  **Purpose:** @purpose
+  **Badges:** @badges
+  **Notes:** @note
+
+  View details: @link
+
+  Please prepare accordingly. If you have any questions, reach out.
+
+  Best regards,
+  The MakeHaven Team
+
+# Canceled
+email_subject_canceled: 'Appointment Canceled: @title'
+email_body_canceled: |
+  Dear @recipient_name,
+
+  The appointment titled "@title" scheduled for @date has been canceled.
+
+  You can reschedule at your convenience.
+
+  If you have any questions, please reach out.
+
+  Best regards,
+  The MakeHaven Team
+
+# Feedback invitation (standalone follow-up if used)
+email_subject_feedback_invitation: 'We value your feedback on "@title" (@date)'
+email_body_feedback_invitation: |
+  Dear @recipient_name,
+
+  Thanks for attending "@title" on @date. We’d appreciate your feedback.
+
+  Share feedback: @feedback_link
+
+  Best regards,
+  The MakeHaven Team
+
+# Behavior
 development_mode: false
-email_subject_problem_notice: 'Issue Reported During Appointment - @title'
-email_body_problem_notice: "An issue has been reported during an appointment. Details are as follows:\n\n**Appointment:** @title\n**Date:** @date\n**Reported By:** @author_name\n**Volunteer:** @volunteer_name\n**Reported Issue:** @result\n**Feedback Provided:** @feedback\n**View Appointment:** @link\n"
-email_subject_feedback_invitation: 'Feedback for your appointment'
-email_body_feedback_invitation: 'Please provide feedback for your appointment on @date.'

@@ -67,6 +67,7 @@ class AppointmentNotificationsSettingsForm extends ConfigFormBase {
     $form['problem_notice'] = [
       '#type' => 'fieldset',
       '#title' => $this->t('Problem Notice Email'),
+      '#tree' => TRUE, 
       '#collapsible' => TRUE,
       '#collapsed' => FALSE,
     ];
@@ -94,6 +95,7 @@ class AppointmentNotificationsSettingsForm extends ConfigFormBase {
     $form['member_scheduled'] = [
       '#type' => 'fieldset',
       '#title' => $this->t('Member Scheduled Email'),
+      '#tree' => TRUE, 
       '#collapsible' => TRUE,
       '#collapsed' => FALSE,
     ];
@@ -114,6 +116,7 @@ class AppointmentNotificationsSettingsForm extends ConfigFormBase {
     $form['host_scheduled'] = [
       '#type' => 'fieldset',
       '#title' => $this->t('Host Scheduled Email'),
+      '#tree' => TRUE, 
       '#collapsible' => TRUE,
       '#collapsed' => FALSE,
     ];
@@ -134,6 +137,7 @@ class AppointmentNotificationsSettingsForm extends ConfigFormBase {
     $form['canceled'] = [
       '#type' => 'fieldset',
       '#title' => $this->t('Canceled Appointment Email'),
+      '#tree' => TRUE, 
       '#collapsible' => TRUE,
       '#collapsed' => FALSE,
     ];
@@ -154,6 +158,7 @@ class AppointmentNotificationsSettingsForm extends ConfigFormBase {
     $form['feedback_invitation'] = [
       '#type' => 'fieldset',
       '#title' => $this->t('Feedback Invitation Email'),
+      '#tree' => TRUE, 
       '#collapsible' => TRUE,
       '#collapsed' => FALSE,
     ];
@@ -186,7 +191,7 @@ class AppointmentNotificationsSettingsForm extends ConfigFormBase {
    */
   public function submitForm(array &$form, FormStateInterface $form_state) {
     parent::submitForm($form, $form_state);
-
+  
     $this->config('appointment_notifications.settings')
       ->set('email_sender', $form_state->getValue('email_sender'))
       ->set('staff_email', $form_state->getValue(['problem_notice', 'staff_email']))
@@ -203,4 +208,5 @@ class AppointmentNotificationsSettingsForm extends ConfigFormBase {
       ->set('development_mode', $form_state->getValue('development_mode'))
       ->save();
   }
+  
 }
