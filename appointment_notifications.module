@@ -269,52 +269,88 @@ function _appointment_notifications_send_email(Node $node, $action) {
 }
 
 
+
+
+
+
+
 /**
- * Implements hook_mail().
+ * Implements hook_cron().
  */
-function appointment_notifications_mail($key, &$message, $params) {
-  $module = 'appointment_notifications';
+function appointment_notifications_cron() {
+  $yesterday = new \DateTime('yesterday', new \DateTimeZone('UTC'));
+  $yesterday_start = $yesterday->format('Y-m-d\T00:00:00');
+  $yesterday_end = $yesterday->format('Y-m-d\T23:59:59');
 
-  switch ($key) {
-    case 'appointment_member_scheduled':
-    case 'appointment_host_scheduled':
-    case 'appointment_canceled':
-    case 'appointment_problem_notice':
-      // Set the email subject.
-      $message['subject'] = $params['subject'];
+  $query = \Drupal::entityQuery('node')
+    ->condition('type', 'appointment')
+    ->condition('field_appointment_date', $yesterday_start, '>=')
+    ->condition('field_appointment_date', $yesterday_end, '<=');
 
-      // Set the email body.
-      $message['body'][] = $params['message'];
+  $nids = $query->execute();
+  $nodes = Node::loadMultiple($nids);
 
-      // Add CC headers if provided.
-      if (!empty($params['cc'])) {
-        $message['headers']['Cc'] = $params['cc'];
-      }
-
-      break;
-
-    default:
-      // Handle other cases or set default behavior.
-      \Drupal::logger($module)->warning('No email implementation for key: @key', ['@key' => $key]);
-      break;
+  foreach ($nodes as $node) {
+    _appointment_notifications_send_feedback_invitation($node);
   }
 }
 
+/**
+ * Helper function to send a feedback invitation email.
+ */
+function _appointment_notifications_send_feedback_invitation(Node $node) {
+  $mailManager = \Drupal::service('plugin.manager.mail');
+  $config = \Drupal::config('appointment_notifications.settings');
+  $module = 'appointment_notifications';
+  $key = 'appointment_feedback_invitation';
+  $language = \Drupal::currentUser()->getPreferredLangcode();
+  $sender = $config->get('email_sender');
+  $development_mode = $config->get('development_mode');
+  $to = $node->getOwner()->getEmail();
 
+  // Prepare replacements.
+  $replacements = [
+    '@title' => $node->getTitle(),
+    '@date' => $node->get('field_appointment_date')->value,
+    '@link' => Url::fromRoute('entity.node.canonical', ['node' => $node->id()], ['absolute' => TRUE])->toString(),
+    '@feedback_link' => 'https://www.makehaven.org/appointment/feedback',
+  ];
 
+  // Load templates.
+  $subject_template = $config->get("email_subject_feedback_invitation") ?? 'Feedback for your appointment';
+  $body_template = $config->get("email_body_feedback_invitation") ?? 'Please provide feedback for your appointment on @date.';
 
+  // Replace tokens.
+  $subject = strtr($subject_template, $replacements);
+  $body = strtr($body_template, $replacements);
+
+  if ($development_mode) {
+    \Drupal::logger('appointment_notifications')->notice('Development Mode: Feedback invitation to @recipient with subject "@subject".', [
+      '@recipient' => $to,
+      '@subject' => $subject,
+    ]);
+  } else {
+    $params = ['subject' => $subject, 'message' => $body];
+    $result = $mailManager->mail($module, $key, $to, $language, $params, $sender);
+    if ($result['result'] !== true) {
+      \Drupal::logger('appointment_notifications')->error('Failed to send feedback invitation to @recipient', [
+        '@recipient' => $to,
+      ]);
+    }
+  }
+}
 
 /**
  * Helper function to send a problem notice to staff.
  */
 function _appointment_notifications_send_problem_notice(Node $node) {
   $mailManager = \Drupal::service('plugin.manager.mail');
-  $config = \Drupal::config('appointment_notifications_settings');
+  $config = \Drupal::config('appointment_notifications.settings');
   $module = 'appointment_notifications';
   $key = 'appointment_problem_notice';
   $language = \Drupal::currentUser()->getPreferredLangcode();
   $sender = $config->get('email_sender');
-  $to = $config->get('staff_email'); // Get the staff email from configuration.
+  $to_emails = explode(',', $config->get('staff_email'));
   $development_mode = $config->get('development_mode');
 
   // Prepare replacement patterns.
@@ -328,57 +364,46 @@ function _appointment_notifications_send_problem_notice(Node $node) {
     '@link' => Url::fromRoute('entity.node.canonical', ['node' => $node->id()], ['absolute' => TRUE])->toString(),
   ];
 
-// Initialize volunteer/host name as 'Not specified' by default.
-$volunteer_name = 'Not specified';
+  // Initialize volunteer/host name as 'Not specified' by default.
+  $volunteer_name = 'Not specified';
 
-// Check if the field_appointment_host field exists and has a value.
-if ($node->hasField('field_appointment_host') && !$node->get('field_appointment_host')->isEmpty()) {
-  $host_user = $node->get('field_appointment_host')->entity;
+  // Check if the field_appointment_host field exists and has a value.
+  if ($node->hasField('field_appointment_host') && !$node->get('field_appointment_host')->isEmpty()) {
+    $host_user = $node->get('field_appointment_host')->entity;
 
-  if ($host_user) {
-    $volunteer_name = $host_user->getDisplayName();
-    \Drupal::logger('appointment_notifications')->debug('Host user found: @name', ['@name' => $volunteer_name]);
+    if ($host_user) {
+      $volunteer_name = $host_user->getDisplayName();
+      \Drupal::logger('appointment_notifications')->debug('Host user found: @name', ['@name' => $volunteer_name]);
+    } else {
+      \Drupal::logger('appointment_notifications')->warning('Host user entity is not loaded or is empty.');
+    }
   } else {
-    \Drupal::logger('appointment_notifications')->warning('Host user entity is not loaded or is empty.');
+    \Drupal::logger('appointment_notifications')->warning('field_appointment_host is missing or empty.');
   }
-} else {
-  \Drupal::logger('appointment_notifications')->warning('field_appointment_host is missing or empty.');
-}
 
-// Assign the volunteer name to the replacement array.
-$replacements['@volunteer_name'] = $volunteer_name;
+  // Assign the volunteer name to the replacement array.
+  $replacements['@volunteer_name'] = $volunteer_name;
 
-  // Compose the email.
-  $subject = t('Issue Reported During Appointment - @title', ['@title' => $node->getTitle()]);
-  $body = t('An issue has been reported during an appointment. Details are as follows:') . "\n\n";
-  $body .= t('**Appointment:** @title', $replacements) . "\n";
-  $body .= t('**Date:** @date', $replacements) . "\n";
-  $body .= t('**Reported By:** @author_name', $replacements) . "\n";
-  $body .= t('**Volunteer:** @volunteer_name', $replacements) . "\n";
-  $body .= t('**Reported Issue:** @result', $replacements) . "\n";
-  $body .= t('**Feedback Provided:** @feedback', $replacements) . "\n";
-  $body .= t('**View Appointment:** @link', $replacements) . "\n";
+  // Load templates.
+  $subject_template = $config->get("email_subject_problem_notice") ?? 'Issue Reported During Appointment - @title';
+  $body_template = $config->get("email_body_problem_notice") ?? 'An issue has been reported during an appointment.';
+
+  // Replace tokens.
+  $subject = strtr($subject_template, $replacements);
+  $body = strtr($body_template, $replacements);
 
   if ($development_mode) {
-    // Log or display the email content instead of sending.
-    \Drupal::logger('appointment_notifications')->notice('Development Mode: Problem email to be sent to @recipients with subject "@subject" and message "@message".', [
-      '@recipients' => $to,
+    \Drupal::logger('appointment_notifications')->notice('Development Mode: Problem email to be sent to @recipients with subject "@subject".', [
+      '@recipients' => implode(',', $to_emails),
       '@subject' => $subject,
-      '@message' => $body,
     ]);
-
-    // Display the message on the screen (useful during development).
-    \Drupal::messenger()->addMessage(t('Development Mode: Problem email to be sent to @recipients with subject "@subject" and message "@message".', [
-      '@recipients' => $to,
-      '@subject' => $subject,
-      '@message' => nl2br($body),
-    ]));
   } else {
-    $params = ['subject' => $subject, 'message' => $body];
-    $result = $mailManager->mail($module, $key, $to, $language, $params, $sender);
-
-    if (!$result['result']) {
-      \Drupal::logger('appointment_notifications')->error('Failed to send problem email to @recipient', ['@recipient' => $to]);
+    foreach ($to_emails as $to) {
+      $params = ['subject' => $subject, 'message' => $body];
+      $result = $mailManager->mail($module, $key, trim($to), $language, $params, $sender);
+      if ($result['result'] !== true) {
+        \Drupal::logger('appointment_notifications')->error('Failed to send problem email to @recipient', ['@recipient' => $to]);
+      }
     }
   }
 }

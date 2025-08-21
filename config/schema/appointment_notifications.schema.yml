@@ -1,4 +1,4 @@
-appointment_notifications_settings:
+appointment_notifications.settings:
   type: config_object
   label: 'Appointment Notifications Settings'
   mapping:
@@ -8,6 +8,12 @@ appointment_notifications_settings:
     staff_email:
       type: string
       label: 'Staff Notification Email'
+    email_subject_problem_notice:
+      type: string
+      label: 'Subject for Problem Notice Email'
+    email_body_problem_notice:
+      type: text
+      label: 'Body for Problem Notice Email'
     email_subject_member_scheduled:
       type: string
       label: 'Subject for Member Scheduled Email'
@@ -29,3 +35,9 @@ appointment_notifications_settings:
     development_mode:
       type: boolean
       label: 'Enable Development Mode'
+    email_subject_feedback_invitation:
+      type: string
+      label: 'Subject for Feedback Invitation Email'
+    email_body_feedback_invitation:
+      type: text
+      label: 'Body for Feedback Invitation Email'

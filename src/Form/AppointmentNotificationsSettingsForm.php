@@ -27,6 +27,36 @@ class AppointmentNotificationsSettingsForm extends ConfigFormBase {
   public function buildForm(array $form, FormStateInterface $form_state) {
     $config = $this->config('appointment_notifications.settings');
 
+    $form['replacement_patterns'] = [
+      '#type' => 'details',
+      '#title' => $this->t('Available Replacement Patterns'),
+      '#collapsible' => TRUE,
+      '#collapsed' => TRUE,
+      '#description' => '<table>
+        <tr><th>Pattern</th><th>Description</th></tr>
+        <tr><td>@title</td><td>The title of the appointment.</td></tr>
+        <tr><td>@date</td><td>The date of the appointment.</td></tr>
+        <tr><td>@time</td><td>The time of the appointment.</td></tr>
+        <tr><td>@purpose</td><td>The purpose of the appointment.</td></tr>
+        <tr><td>@feedback</td><td>The feedback provided for the appointment.</td></tr>
+        <tr><td>@result</td><td>The result of the appointment.</td></tr>
+        <tr><td>@link</td><td>A link to the appointment.</td></tr>
+        <tr><td>@feedback_link</td><td>A link to the feedback form.</td></tr>
+        <tr><td>@scheduled_by</td><td>The name of the user who scheduled the appointment.</td></tr>
+        <tr><td>@badges</td><td>The badges associated with the appointment.</td></tr>
+        <tr><td>@note</td><td>The note for the appointment.</td></tr>
+        <tr><td>@volunteer_name</td><td>The name of the host volunteer.</td></tr>
+        <tr><td>@recipient_name</td><td>The name of the recipient.</td></tr>
+        <tr><td>@member_email</td><td>The email of the member.</td></tr>
+        <tr><td>@member_slack_id</td><td>The Slack ID of the member.</td></tr>
+        <tr><td>@member_slack_link</td><td>A link to the member\'s Slack profile.</td></tr>
+        <tr><td>@host_email</td><td>The email of the host.</td></tr>
+        <tr><td>@host_slack_id</td><td>The Slack ID of the host.</td></tr>
+        <tr><td>@host_slack_link</td><td>A link to the host\'s Slack profile.</td></tr>
+        <tr><td>@author_name</td><td>The name of the author of the node.</td></tr>
+      </table>',
+    ];
+
     $form['email_sender'] = [
       '#type' => 'email',
       '#title' => $this->t('Sender Email Address'),
@@ -34,50 +64,111 @@ class AppointmentNotificationsSettingsForm extends ConfigFormBase {
       '#description' => $this->t('The email address from which notifications will be sent.'),
     ];
 
-    $form['staff_email'] = [
-      '#type' => 'email',
-      '#title' => $this->t('Staff Notification Email'),
-      '#default_value' => $config->get('staff_email'),
-      '#description' => $this->t('Email address where notifications about problems will be sent.'),
+    $form['problem_notice'] = [
+      '#type' => 'fieldset',
+      '#title' => $this->t('Problem Notice Email'),
+      '#collapsible' => TRUE,
+      '#collapsed' => FALSE,
     ];
 
-    $form['email_subject_member_scheduled'] = [
+    $form['problem_notice']['staff_email'] = [
+      '#type' => 'textarea',
+      '#title' => $this->t('Staff Notification Emails'),
+      '#default_value' => $config->get('staff_email'),
+      '#description' => $this->t('Email addresses (comma-separated) where notifications about problems will be sent.'),
+    ];
+
+    $form['problem_notice']['email_subject_problem_notice'] = [
+      '#type' => 'textfield',
+      '#title' => $this->t('Subject for Problem Notice Email'),
+      '#default_value' => $config->get('email_subject_problem_notice'),
+    ];
+
+    $form['problem_notice']['email_body_problem_notice'] = [
+      '#type' => 'textarea',
+      '#title' => $this->t('Body for Problem Notice Email'),
+      '#default_value' => $config->get('email_body_problem_notice'),
+      '#description' => $this->t('Use placeholders like @title, @date, @result, @feedback, @author_name, @volunteer_name, @link, etc.'),
+    ];
+
+    $form['member_scheduled'] = [
+      '#type' => 'fieldset',
+      '#title' => $this->t('Member Scheduled Email'),
+      '#collapsible' => TRUE,
+      '#collapsed' => FALSE,
+    ];
+
+    $form['member_scheduled']['email_subject_member_scheduled'] = [
       '#type' => 'textfield',
       '#title' => $this->t('Subject for Member Scheduled Email'),
       '#default_value' => $config->get('email_subject_member_scheduled'),
     ];
 
-    $form['email_body_member_scheduled'] = [
+    $form['member_scheduled']['email_body_member_scheduled'] = [
       '#type' => 'textarea',
       '#title' => $this->t('Body for Member Scheduled Email'),
       '#default_value' => $config->get('email_body_member_scheduled'),
-      '#description' => $this->t('Use placeholders like {title}, {date}, {with}, etc.'),
+      '#description' => $this->t('Use placeholders like @title, @date, @with, etc.'),
     ];
 
-    $form['email_subject_host_scheduled'] = [
+    $form['host_scheduled'] = [
+      '#type' => 'fieldset',
+      '#title' => $this->t('Host Scheduled Email'),
+      '#collapsible' => TRUE,
+      '#collapsed' => FALSE,
+    ];
+
+    $form['host_scheduled']['email_subject_host_scheduled'] = [
       '#type' => 'textfield',
       '#title' => $this->t('Subject for Host Scheduled Email'),
       '#default_value' => $config->get('email_subject_host_scheduled'),
     ];
 
-    $form['email_body_host_scheduled'] = [
+    $form['host_scheduled']['email_body_host_scheduled'] = [
       '#type' => 'textarea',
       '#title' => $this->t('Body for Host Scheduled Email'),
       '#default_value' => $config->get('email_body_host_scheduled'),
-      '#description' => $this->t('Use placeholders like {title}, {date}, {with}, etc.'),
+      '#description' => $this->t('Use placeholders like @title, @date, @with, etc.'),
     ];
 
-    $form['email_subject_canceled'] = [
+    $form['canceled'] = [
+      '#type' => 'fieldset',
+      '#title' => $this->t('Canceled Appointment Email'),
+      '#collapsible' => TRUE,
+      '#collapsed' => FALSE,
+    ];
+
+    $form['canceled']['email_subject_canceled'] = [
       '#type' => 'textfield',
       '#title' => $this->t('Subject for Canceled Appointment Email'),
       '#default_value' => $config->get('email_subject_canceled'),
     ];
 
-    $form['email_body_canceled'] = [
+    $form['canceled']['email_body_canceled'] = [
       '#type' => 'textarea',
       '#title' => $this->t('Body for Canceled Appointment Email'),
       '#default_value' => $config->get('email_body_canceled'),
-      '#description' => $this->t('Use placeholders like {title}, {date}, {with}, etc.'),
+      '#description' => $this->t('Use placeholders like @title, @date, @with, etc.'),
+    ];
+
+    $form['feedback_invitation'] = [
+      '#type' => 'fieldset',
+      '#title' => $this->t('Feedback Invitation Email'),
+      '#collapsible' => TRUE,
+      '#collapsed' => FALSE,
+    ];
+
+    $form['feedback_invitation']['email_subject_feedback_invitation'] = [
+      '#type' => 'textfield',
+      '#title' => $this->t('Subject for Feedback Invitation Email'),
+      '#default_value' => $config->get('email_subject_feedback_invitation'),
+    ];
+
+    $form['feedback_invitation']['email_body_feedback_invitation'] = [
+      '#type' => 'textarea',
+      '#title' => $this->t('Body for Feedback Invitation Email'),
+      '#default_value' => $config->get('email_body_feedback_invitation'),
+      '#description' => $this->t('Use placeholders like @title, @date, @link, @feedback_link, etc.'),
     ];
 
     $form['development_mode'] = [
@@ -96,13 +187,17 @@ class AppointmentNotificationsSettingsForm extends ConfigFormBase {
   public function submitForm(array &$form, FormStateInterface $form_state) {
     $this->config('appointment_notifications.settings')
       ->set('email_sender', $form_state->getValue('email_sender'))
-      ->set('staff_email', $form_state->getValue('staff_email'))
-      ->set('email_subject_member_scheduled', $form_state->getValue('email_subject_member_scheduled'))
-      ->set('email_body_member_scheduled', $form_state->getValue('email_body_member_scheduled'))
-      ->set('email_subject_host_scheduled', $form_state->getValue('email_subject_host_scheduled'))
-      ->set('email_body_host_scheduled', $form_state->getValue('email_body_host_scheduled'))
-      ->set('email_subject_canceled', $form_state->getValue('email_subject_canceled'))
-      ->set('email_body_canceled', $form_state->getValue('email_body_canceled'))
+      ->set('staff_email', $form_state->getValue(['problem_notice', 'staff_email']))
+      ->set('email_subject_problem_notice', $form_state->getValue(['problem_notice', 'email_subject_problem_notice']))
+      ->set('email_body_problem_notice', $form_state->getValue(['problem_notice', 'email_body_problem_notice']))
+      ->set('email_subject_member_scheduled', $form_state->getValue(['member_scheduled', 'email_subject_member_scheduled']))
+      ->set('email_body_member_scheduled', $form_state->getValue(['member_scheduled', 'email_body_member_scheduled']))
+      ->set('email_subject_host_scheduled', $form_state->getValue(['host_scheduled', 'email_subject_host_scheduled']))
+      ->set('email_body_host_scheduled', $form_state->getValue(['host_scheduled', 'email_body_host_scheduled']))
+      ->set('email_subject_canceled', $form_state->getValue(['canceled', 'email_subject_canceled']))
+      ->set('email_body_canceled', $form_state->getValue(['canceled', 'email_body_canceled']))
+      ->set('email_subject_feedback_invitation', $form_state->getValue(['feedback_invitation', 'email_subject_feedback_invitation']))
+      ->set('email_body_feedback_invitation', $form_state->getValue(['feedback_invitation', 'email_body_feedback_invitation']))
       ->set('development_mode', $form_state->getValue('development_mode'))
       ->save();
 
