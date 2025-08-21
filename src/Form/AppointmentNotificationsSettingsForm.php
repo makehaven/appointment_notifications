@@ -185,6 +185,8 @@ class AppointmentNotificationsSettingsForm extends ConfigFormBase {
    * {@inheritdoc}
    */
   public function submitForm(array &$form, FormStateInterface $form_state) {
+    parent::submitForm($form, $form_state);
+
     $this->config('appointment_notifications.settings')
       ->set('email_sender', $form_state->getValue('email_sender'))
       ->set('staff_email', $form_state->getValue(['problem_notice', 'staff_email']))
@@ -200,7 +202,5 @@ class AppointmentNotificationsSettingsForm extends ConfigFormBase {
       ->set('email_body_feedback_invitation', $form_state->getValue(['feedback_invitation', 'email_body_feedback_invitation']))
       ->set('development_mode', $form_state->getValue('development_mode'))
       ->save();
-
-    parent::submitForm($form, $form_state);
   }
 }
