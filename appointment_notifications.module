@@ -324,6 +324,10 @@ function _appointment_notifications_send_feedback_invitation(Node $node) {
   $subject = strtr($subject_template, $replacements);
   $body = strtr($body_template, $replacements);
 
+  // Ensure subject and body are not empty.
+  $subject = trim($subject) ?: 'Feedback for your appointment';
+  $body = trim($body) ?: 'This is a fallback email body since the template content was empty.';
+
   if ($development_mode) {
     \Drupal::logger('appointment_notifications')->notice('Development Mode: Feedback invitation to @recipient with subject "@subject".', [
       '@recipient' => $to,
@@ -392,6 +396,10 @@ function _appointment_notifications_send_problem_notice(Node $node) {
   $subject = strtr($subject_template, $replacements);
   $body = strtr($body_template, $replacements);
 
+  // Ensure subject and body are not empty.
+  $subject = trim($subject) ?: 'Issue Reported During Appointment';
+  $body = trim($body) ?: 'This is a fallback email body since the template content was empty.';
+
   if ($development_mode) {
     \Drupal::logger('appointment_notifications')->notice('Development Mode: Problem email to be sent to @recipients with subject "@subject".', [
       '@recipients' => implode(',', $to_emails),
@@ -408,3 +416,22 @@ function _appointment_notifications_send_problem_notice(Node $node) {
   }
 }
 
+/**
+ * Implements hook_mail().
+ */
+function appointment_notifications_mail($key, &$message, $params) {
+  switch ($key) {
+    case 'appointment_member_scheduled':
+    case 'appointment_host_scheduled':
+    case 'appointment_canceled':
+    case 'appointment_problem_notice':
+    case 'appointment_feedback_invitation':
+      $message['subject'] = $params['subject'];
+      $message['body'][] = $params['message'];
+      break;
+
+    default:
+      \Drupal::logger('appointment_notifications')->warning('Unhandled mail key: @key', ['@key' => $key]);
+      break;
+  }
+}
