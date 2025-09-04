@@ -70,13 +70,14 @@ class AppointmentNotificationsSettingsForm extends ConfigFormBase {
       '#tree' => TRUE, 
       '#collapsible' => TRUE,
       '#collapsed' => FALSE,
+      '#description' => $this->t('This email is sent to staff when an issue is reported during an appointment. It is triggered when a user submits the appointment feedback form with a "problem" status.'),
     ];
 
     $form['problem_notice']['staff_email'] = [
       '#type' => 'textarea',
       '#title' => $this->t('Staff Notification Emails'),
       '#default_value' => $config->get('staff_email'),
-      '#description' => $this->t('Email addresses (comma-separated) where notifications about problems will be sent.'),
+      '#description' => $this->t('Email addresses (comma-separated) where notifications about problems will be sent. This is the "To" address for this notification.'),
     ];
 
     $form['problem_notice']['email_subject_problem_notice'] = [
@@ -98,6 +99,7 @@ class AppointmentNotificationsSettingsForm extends ConfigFormBase {
       '#tree' => TRUE, 
       '#collapsible' => TRUE,
       '#collapsed' => FALSE,
+      '#description' => $this->t('This email is sent to the member who scheduled the appointment. It is triggered immediately after an appointment is successfully scheduled. The "From" address is the Sender Email Address and the "To" address is the member\'s email.'),
     ];
 
     $form['member_scheduled']['email_subject_member_scheduled'] = [
@@ -119,6 +121,7 @@ class AppointmentNotificationsSettingsForm extends ConfigFormBase {
       '#tree' => TRUE, 
       '#collapsible' => TRUE,
       '#collapsed' => FALSE,
+      '#description' => $this->t('This email is sent to the host of the appointment. It is triggered at the same time as the member scheduled email. The "From" address is the Sender Email Address and the "To" address is the host\'s email.'),
     ];
 
     $form['host_scheduled']['email_subject_host_scheduled'] = [
@@ -140,6 +143,7 @@ class AppointmentNotificationsSettingsForm extends ConfigFormBase {
       '#tree' => TRUE, 
       '#collapsible' => TRUE,
       '#collapsed' => FALSE,
+      '#description' => $this->t('This email is sent to both the member and the host when an appointment is canceled. The "From" address is the Sender Email Address and the "To" address is the member\'s and host\'s email.'),
     ];
 
     $form['canceled']['email_subject_canceled'] = [
@@ -161,6 +165,7 @@ class AppointmentNotificationsSettingsForm extends ConfigFormBase {
       '#tree' => TRUE, 
       '#collapsible' => TRUE,
       '#collapsed' => FALSE,
+      '#description' => $this->t('This email is sent to the member after an appointment is completed to ask for feedback. The "From" address is the Sender Email Address and the "To" address is the member\'s email.'),
     ];
 
     $form['feedback_invitation']['email_subject_feedback_invitation'] = [
@@ -181,6 +186,14 @@ class AppointmentNotificationsSettingsForm extends ConfigFormBase {
       '#title' => $this->t('Enable Development Mode'),
       '#default_value' => $config->get('development_mode'),
       '#description' => $this->t('If enabled, emails will not be sent and will be logged or displayed instead.'),
+    ];
+
+    $form['contribute'] = [
+      '#type' => 'fieldset',
+      '#title' => $this->t('Contribute'),
+      '#collapsible' => TRUE,
+      '#collapsed' => FALSE,
+      '#description' => $this->t('This module is open source. If you have suggestions for improvements or bug fixes, please <a href="https://github.com/makehaven/appointment_notifications">contribute on GitHub</a>.'),
     ];
 
     return parent::buildForm($form, $form_state);
