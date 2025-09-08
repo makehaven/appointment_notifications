@@ -181,11 +181,18 @@ class AppointmentNotificationsSettingsForm extends ConfigFormBase {
       '#description' => $this->t('Use placeholders like @title, @date, @link, @feedback_link, etc.'),
     ];
 
+    $form['email_logging'] = [
+      '#type' => 'checkbox',
+      '#title' => $this->t('Enable Email Logging'),
+      '#default_value' => $config->get('email_logging'),
+      '#description' => $this->t('If enabled, all outgoing emails will be logged. This is independent of development mode.'),
+    ];
+
     $form['development_mode'] = [
       '#type' => 'checkbox',
       '#title' => $this->t('Enable Development Mode'),
       '#default_value' => $config->get('development_mode'),
-      '#description' => $this->t('If enabled, emails will not be sent and will be logged or displayed instead.'),
+      '#description' => $this->t('If enabled, emails will not be sent.'),
     ];
 
     $form['contribute'] = [
@@ -218,6 +225,7 @@ class AppointmentNotificationsSettingsForm extends ConfigFormBase {
       ->set('email_body_canceled', $form_state->getValue(['canceled', 'email_body_canceled']))
       ->set('email_subject_feedback_invitation', $form_state->getValue(['feedback_invitation', 'email_subject_feedback_invitation']))
       ->set('email_body_feedback_invitation', $form_state->getValue(['feedback_invitation', 'email_body_feedback_invitation']))
+      ->set('email_logging', $form_state->getValue('email_logging'))
       ->set('development_mode', $form_state->getValue('development_mode'))
       ->save();
   }

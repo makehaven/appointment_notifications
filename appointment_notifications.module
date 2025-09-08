@@ -80,6 +80,7 @@ function _appointment_notifications_send_email(Node $node, $action) {
   $language = \Drupal::currentUser()->getPreferredLangcode();
   $sender = $config->get('email_sender');
   $development_mode = $config->get('development_mode');
+  $email_logging = $config->get('email_logging');
 
   // Slack Team ID
   $slack_team_id = 'T02DJKD4B'; // Replace with your actual Slack Team ID
@@ -250,12 +251,14 @@ function _appointment_notifications_send_email(Node $node, $action) {
     return;
   }
 
-  if ($development_mode) {
-    \Drupal::logger('appointment_notifications')->notice('Development Mode: Email to @recipients with subject "@subject".', [
+  if ($email_logging) {
+    \Drupal::logger('appointment_notifications')->notice('Email to @recipients with subject "@subject".', [
       '@recipients' => implode(', ', $to),
       '@subject' => $subject,
     ]);
-  } else {
+  }
+
+  if (!$development_mode) {
     foreach ($to as $recipient) {
       $params = ['subject' => $subject, 'message' => $body, 'cc' => implode(', ', $cc)];
       $result = $mailManager->mail($module, $key, $recipient, $language, $params, $sender);
@@ -306,6 +309,7 @@ function _appointment_notifications_send_feedback_invitation(Node $node) {
   $language = \Drupal::currentUser()->getPreferredLangcode();
   $sender = $config->get('email_sender');
   $development_mode = $config->get('development_mode');
+  $email_logging = $config->get('email_logging');
   $to = $node->getOwner()->getEmail();
 
   // Prepare replacements.
@@ -328,12 +332,14 @@ function _appointment_notifications_send_feedback_invitation(Node $node) {
   $subject = trim($subject) ?: 'Feedback for your appointment';
   $body = trim($body) ?: 'This is a fallback email body since the template content was empty.';
 
-  if ($development_mode) {
-    \Drupal::logger('appointment_notifications')->notice('Development Mode: Feedback invitation to @recipient with subject "@subject".', [
+  if ($email_logging) {
+    \Drupal::logger('appointment_notifications')->notice('Feedback invitation to @recipient with subject "@subject".', [
       '@recipient' => $to,
       '@subject' => $subject,
     ]);
-  } else {
+  }
+
+  if (!$development_mode) {
     $params = ['subject' => $subject, 'message' => $body];
     $result = $mailManager->mail($module, $key, $to, $language, $params, $sender);
     if ($result['result'] !== true) {
@@ -356,6 +362,7 @@ function _appointment_notifications_send_problem_notice(Node $node) {
   $sender = $config->get('email_sender');
   $to_emails = explode(',', $config->get('staff_email'));
   $development_mode = $config->get('development_mode');
+  $email_logging = $config->get('email_logging');
 
   // Prepare replacement patterns.
   $replacements = [
@@ -400,12 +407,14 @@ function _appointment_notifications_send_problem_notice(Node $node) {
   $subject = trim($subject) ?: 'Issue Reported During Appointment';
   $body = trim($body) ?: 'This is a fallback email body since the template content was empty.';
 
-  if ($development_mode) {
-    \Drupal::logger('appointment_notifications')->notice('Development Mode: Problem email to be sent to @recipients with subject "@subject".', [
+  if ($email_logging) {
+    \Drupal::logger('appointment_notifications')->notice('Problem email to be sent to @recipients with subject "@subject".', [
       '@recipients' => implode(',', $to_emails),
       '@subject' => $subject,
     ]);
-  } else {
+  }
+
+  if (!$development_mode) {
     foreach ($to_emails as $to) {
       $params = ['subject' => $subject, 'message' => $body];
       $result = $mailManager->mail($module, $key, trim($to), $language, $params, $sender);

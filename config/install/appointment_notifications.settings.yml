@@ -84,4 +84,5 @@ email_body_feedback_invitation: |
   The MakeHaven Team
 
 # Behavior
+email_logging: true
 development_mode: false
