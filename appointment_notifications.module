@@ -252,9 +252,10 @@ function _appointment_notifications_send_email(Node $node, $action) {
   }
 
   if ($email_logging) {
-    \Drupal::logger('appointment_notifications')->notice('Email to @recipients with subject "@subject".', [
+    \Drupal::logger('appointment_notifications')->notice('Email to @recipients with subject "@subject". Body: @body', [
       '@recipients' => implode(', ', $to),
       '@subject' => $subject,
+      '@body' => $body,
     ]);
   }
 
@@ -333,9 +334,10 @@ function _appointment_notifications_send_feedback_invitation(Node $node) {
   $body = trim($body) ?: 'This is a fallback email body since the template content was empty.';
 
   if ($email_logging) {
-    \Drupal::logger('appointment_notifications')->notice('Feedback invitation to @recipient with subject "@subject".', [
+    \Drupal::logger('appointment_notifications')->notice('Feedback invitation to @recipient with subject "@subject". Body: @body', [
       '@recipient' => $to,
       '@subject' => $subject,
+      '@body' => $body,
     ]);
   }
 
@@ -408,9 +410,10 @@ function _appointment_notifications_send_problem_notice(Node $node) {
   $body = trim($body) ?: 'This is a fallback email body since the template content was empty.';
 
   if ($email_logging) {
-    \Drupal::logger('appointment_notifications')->notice('Problem email to be sent to @recipients with subject "@subject".', [
+    \Drupal::logger('appointment_notifications')->notice('Problem email to be sent to @recipients with subject "@subject". Body: @body', [
       '@recipients' => implode(',', $to_emails),
       '@subject' => $subject,
+      '@body' => $body,
     ]);
   }
 
