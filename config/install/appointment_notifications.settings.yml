@@ -83,6 +83,45 @@ email_body_feedback_invitation: |
   Best regards,
   The MakeHaven Team
 
+# Reminder emails
+reminder_enabled: false
+reminder_days_before: 1
+email_subject_member_reminder: 'Reminder: "@title" on @date at @time'
+email_body_member_reminder: |
+  Dear @recipient_name,
+
+  This is a friendly reminder about your appointment "@title".
+
+  **Date:** @date at @time
+  **Purpose:** @purpose
+  **Badges:** @badges
+
+  View appointment: @link
+
+  If you can no longer attend, please update or cancel the appointment.
+
+  Best regards,
+  The MakeHaven Team
+
+email_subject_host_reminder: 'Reminder: Appointment with @scheduled_by on @date at @time'
+email_body_host_reminder: |
+  Dear @recipient_name,
+
+  This is a reminder that you are hosting an appointment.
+
+  **Member:** @scheduled_by (@member_email)
+  **Date:** @date at @time
+  **Purpose:** @purpose
+  **Notes:** @note
+
+  View appointment: @link
+
+  Thank you for volunteering!
+
+  Best regards,
+  The MakeHaven Team
+
 # Behavior
 email_logging: true
 development_mode: false
+calendar_invites_enabled: true

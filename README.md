@@ -9,6 +9,9 @@ The `appointment_notifications` module is a custom Drupal module designed to sen
 - **Appointment Scheduling Notifications**: Sends an email to the attendee (user) and the host (volunteer) when an appointment is scheduled.
 - **Cancellation Notifications**: Sends an email to both the attendee and the host when an appointment is canceled. The attendee is CC'd in the cancellation notice sent to the host.
 - **Problem Reporting Notifications**: Sends a notification to a designated staff email address when an issue is reported during an appointment, such as a volunteer being absent or the meeting being unsuccessful.
+- **Reminder Emails**: Optionally send reminder emails to the attendee and host a configurable number of days before the appointment date.
+- **Feedback Invitations**: Sends a follow-up email the day after the appointment date inviting the attendee to share feedback.
+- **Calendar Invites**: Attaches industry-standard `.ics` calendar files to scheduled and canceled appointment emails so members and hosts can add or remove the event from their calendars. The appointment time range field is used when available; otherwise the system falls back to slot-based estimates.
 - **Development Mode**: When development mode is enabled, emails are logged and displayed on the screen instead of being sent.
 
 ## Installation
@@ -29,6 +32,11 @@ drush en appointment_notifications
   - Member scheduled notification
   - Host scheduled notification
   - Cancellation notification
+  - Member reminder notification
+  - Host reminder notification
+  - Feedback invitation
+- **Calendar Invitations**: Toggle whether scheduling and cancellation emails include `.ics` attachments.
+- **Reminder Emails**: Enable reminder emails and choose how many days before the appointment they are sent.
 - **Development Mode**: Enable this to prevent emails from being sent. Instead, they will be logged and displayed on the screen.
 
 ## Usage
@@ -38,7 +46,10 @@ drush en appointment_notifications
 When an appointment is created or updated, the module will automatically send notifications:
 - **Scheduling**: When a new appointment is scheduled, the attendee and host will receive notifications.
 - **Cancellation**: When an appointment status changes from "scheduled" to "canceled," a notification will be sent to both the attendee and host, with the attendee CC'd in the host's email.
+- **Calendar Invites**: Scheduling emails include an `.ics` invite and cancellation emails send a cancellation update so recipients' calendars stay in sync. Ensure the appointment time range field is populated so the invite has accurate times.
+- **Reminder**: When enabled, reminder emails are sent to the attendee and host the configured number of days before the appointment date.
 - **Problem Reporting**: If an appointment's result changes to a problem state (`volunteer_absent` or `met_unsuccessful`), a notification will be sent to the staff email address configured in the settings.
+- **Feedback Invitation**: The day after the appointment date, the attendee receives a single feedback invitation email.
 
 ## Development
 
@@ -65,7 +76,10 @@ When an appointment is created or updated, the module will automatically send no
 ### Troubleshooting
 
 - **Emails Not Sending**: Ensure that the mail system is properly configured in your environment. In development mode, emails are not sent but logged instead.
-- **Duplicate Emails**: Check that the logic in `appointment_notifications_entity_update()` correctly prevents emails from being sent multiple times for the same event. The comparison of old and new field values is crucial to this.
+- **Feedback Invitations Missing**: Confirm that Drupal cron is running. Feedback invitations match on the appointment date (stored without a time component) and are only sent once per appointment.
+- **Reminder Emails Missing**: Check that reminder emails are enabled and that cron is executed daily. The reminder logic also requires valid email addresses for both the attendee and host.
+- **Duplicate Emails**: Cron-driven reminders and feedback invitations are deduplicated via lightweight state tracking. For real-time notifications (schedule/cancel), verify that the logic in `appointment_notifications_entity_update()` correctly compares old and new field values.
+- **Missing Calendar Attachments**: Verify that the appointment includes a populated time range (`field_appointment_timerange`). Without a start/end timestamp, the module cannot generate an `.ics` file.
 
 ### Future Development Notes
 

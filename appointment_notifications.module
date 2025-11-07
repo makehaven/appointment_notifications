@@ -72,6 +72,330 @@ function _process_template_condition($template, $condition, $include_content) {
 }
 
 
+/**
+ * Builds a formatted date and time for the appointment.
+ *
+ * @param \Drupal\node\Entity\Node $node
+ *   The appointment node.
+ * @param string|null $start_time_override
+ *   Optional override for the host start time (e.g. from request query).
+ *
+ * @return array
+ *   An array with keys:
+ *   - date: The formatted appointment date.
+ *   - time: The formatted appointment time if available.
+ *   - site_timezone: The site timezone used for calculations.
+ */
+function _appointment_notifications_get_schedule_details(Node $node, $start_time_override = NULL) {
+  $site_timezone = \Drupal::config('system.date')->get('timezone.default') ?: 'UTC';
+
+  $formatted_date = 'No date provided';
+  $appointment_time = 'Time not specified';
+  $start_datetime = NULL;
+  $end_datetime = NULL;
+  $date_only_string = '';
+
+  $slot_offsets = [
+    '1' => 0,
+    '1-5' => 30,
+    '2' => 60,
+    '2-5' => 90,
+    '3' => 120,
+    '3-5' => 150,
+  ];
+
+  $selected_offsets = [];
+  if ($node->hasField('field_appointment_slot') && !$node->get('field_appointment_slot')->isEmpty()) {
+    foreach ($node->get('field_appointment_slot')->getValue() as $slot) {
+      $value = $slot['value'] ?? NULL;
+      if ($value !== NULL && isset($slot_offsets[$value])) {
+        $selected_offsets[] = $slot_offsets[$value];
+      }
+    }
+  }
+
+  // Capture the standalone appointment date for formatting and time math.
+  $raw_date = NULL;
+  if ($node->hasField('field_appointment_date') && !$node->get('field_appointment_date')->isEmpty()) {
+    $raw_date = $node->get('field_appointment_date')->value;
+  }
+  if (!empty($raw_date)) {
+    try {
+      $date = new \DateTime($raw_date);
+      $formatted_date = $date->format('l, F j, Y');
+      $date_only_string = $date->format('Y-m-d');
+    }
+    catch (\Exception $e) {
+      \Drupal::logger('appointment_notifications')->error('Error formatting appointment date: @message', ['@message' => $e->getMessage()]);
+    }
+  }
+
+  // Prefer the explicit timerange field when available.
+  if (!$start_datetime && $node->hasField('field_appointment_timerange') && !$node->get('field_appointment_timerange')->isEmpty()) {
+    $range_item = $node->get('field_appointment_timerange')->first();
+    $range_timezone = isset($range_item->timezone) && $range_item->timezone ? $range_item->timezone : $site_timezone;
+
+    $range_start_raw = $range_item->value ?? NULL;
+    $range_end_raw = $range_item->end_value ?? NULL;
+
+    try {
+      if ($range_start_raw !== NULL && $range_start_raw !== '') {
+        $start_datetime = _appointment_notifications_convert_smartdate_value($range_start_raw, $range_timezone)->setTimezone(new \DateTimeZone($site_timezone));
+      }
+      if ($range_end_raw !== NULL && $range_end_raw !== '') {
+        $end_datetime = _appointment_notifications_convert_smartdate_value($range_end_raw, $range_timezone)->setTimezone(new \DateTimeZone($site_timezone));
+      }
+    }
+    catch (\Exception $e) {
+      \Drupal::logger('appointment_notifications')->error('Unable to parse timerange for appointment @nid: @message', [
+        '@nid' => $node->id(),
+        '@message' => $e->getMessage(),
+      ]);
+      $start_datetime = NULL;
+      $end_datetime = NULL;
+    }
+  }
+
+  $host_start_time_raw = NULL;
+  if (!$start_datetime) {
+    if ($node->hasField('field_host_start_time') && !$node->get('field_host_start_time')->isEmpty()) {
+      $host_start_time_raw = $node->get('field_host_start_time')->value;
+    }
+    elseif (!empty($start_time_override)) {
+      $host_start_time_raw = $start_time_override;
+    }
+  }
+
+  if (!empty($host_start_time_raw)) {
+    $host_time_string = $host_start_time_raw;
+    $has_date_component = preg_match('/\d{4}-\d{2}-\d{2}/', $host_start_time_raw);
+    if (!$has_date_component && !empty($date_only_string)) {
+      $host_time_string = $date_only_string . ' ' . $host_start_time_raw;
+    }
+
+    try {
+      $base_start = new \DateTimeImmutable($host_time_string, new \DateTimeZone($site_timezone));
+
+      if (!empty($selected_offsets)) {
+        $min_offset = min($selected_offsets);
+        $duration_minutes = max($selected_offsets) - $min_offset + 30;
+      }
+      else {
+        $min_offset = 0;
+        $duration_minutes = 60;
+      }
+
+      $start_datetime = $base_start->modify('+' . $min_offset . ' minutes');
+      $end_datetime = $start_datetime->modify('+' . $duration_minutes . ' minutes');
+      $appointment_time = $start_datetime->format('g:i A');
+    }
+    catch (\Exception $e) {
+      \Drupal::logger('appointment_notifications')->error('Error calculating appointment time: @message', ['@message' => $e->getMessage()]);
+    }
+  }
+
+  if ($start_datetime instanceof \DateTimeInterface) {
+    $formatted_date = $start_datetime->format('l, F j, Y');
+    $appointment_time = $start_datetime->format('g:i A');
+  }
+
+  return [
+    'date' => $formatted_date,
+    'time' => $appointment_time,
+    'site_timezone' => $site_timezone,
+    'start_datetime' => $start_datetime,
+    'end_datetime' => $end_datetime,
+  ];
+}
+
+/**
+ * Converts Smart Date raw values (timestamp or string) to DateTimeImmutable.
+ *
+ * @param string|int $value
+ *   The stored Smart Date value.
+ * @param string $timezone
+ *   The timezone to apply to the value.
+ *
+ * @return \DateTimeImmutable
+ *   A DateTimeImmutable object in the provided timezone.
+ */
+function _appointment_notifications_convert_smartdate_value($value, string $timezone): \DateTimeImmutable {
+  if (is_numeric($value)) {
+    $timestamp = (int) $value;
+    $date = new \DateTimeImmutable('@' . $timestamp);
+    return $date->setTimezone(new \DateTimeZone($timezone));
+  }
+  return new \DateTimeImmutable($value, new \DateTimeZone($timezone));
+}
+
+/**
+ * Determines whether a notification should be sent for a node on a given date.
+ *
+ * @param \Drupal\node\Entity\Node $node
+ *   The appointment node.
+ * @param string $type
+ *   The notification type (e.g. 'feedback', 'member_reminder').
+ * @param string $date_value
+ *   The date value used to deduplicate sends (format: Y-m-d).
+ *
+ * @return bool
+ *   TRUE if the notification should be sent, FALSE if it was already sent.
+ */
+function _appointment_notifications_should_send(Node $node, $type, $date_value) {
+  $state = \Drupal::state();
+  $sent = $state->get('appointment_notifications.sent.' . $type, []);
+  return !isset($sent[$node->id()]) || $sent[$node->id()] !== $date_value;
+}
+
+/**
+ * Marks that a notification has been sent for a node on a given date.
+ *
+ * @param \Drupal\node\Entity\Node $node
+ *   The appointment node.
+ * @param string $type
+ *   The notification type (e.g. 'feedback', 'member_reminder').
+ * @param string $date_value
+ *   The date value used to deduplicate sends (format: Y-m-d).
+ */
+function _appointment_notifications_mark_sent(Node $node, $type, $date_value) {
+  $state = \Drupal::state();
+  $key = 'appointment_notifications.sent.' . $type;
+  $sent = $state->get($key, []);
+  $sent[$node->id()] = $date_value;
+  $state->set($key, $sent);
+}
+
+/**
+ * Escapes text for use within an ICS file.
+ *
+ * @param string $value
+ *   The string to escape.
+ *
+ * @return string
+ *   The escaped string.
+ */
+function _appointment_notifications_ics_escape($value) {
+  $value = (string) $value;
+  $value = str_replace(['\\', ';', ','], ['\\\\', '\\;', '\\,'], $value);
+  $value = preg_replace("/(\r\n|\r|\n)/", '\\n', $value);
+  return $value;
+}
+
+/**
+ * Builds a calendar invite attachment for an appointment notification.
+ *
+ * @param \Drupal\node\Entity\Node $node
+ *   The appointment node.
+ * @param array $schedule_details
+ *   The schedule details array returned by
+ *   _appointment_notifications_get_schedule_details().
+ * @param string $action
+ *   The notification action (e.g. 'member_scheduled', 'canceled').
+ * @param array $participants
+ *   A list of participant arrays with keys: email, name.
+ * @param array $context
+ *   Additional context such as date, time, purpose, note, and link.
+ *
+ * @return array|null
+ *   The attachment array suitable for Drupal mail, or NULL if an invite
+ *   cannot be generated.
+ */
+function _appointment_notifications_build_calendar_attachment(Node $node, array $schedule_details, $action, array $participants = [], array $context = []) {
+  $start = $schedule_details['start_datetime'] ?? NULL;
+  $end = $schedule_details['end_datetime'] ?? NULL;
+
+  if ($start instanceof \DateTimeInterface && !$end instanceof \DateTimeInterface) {
+    $end = $start->modify('+60 minutes');
+  }
+
+  if (!$start instanceof \DateTimeInterface || !$end instanceof \DateTimeInterface) {
+    return NULL;
+  }
+
+  $method = ($action === 'canceled') ? 'CANCEL' : 'REQUEST';
+  $status = ($method === 'CANCEL') ? 'CANCELLED' : 'CONFIRMED';
+  $sequence = ($method === 'CANCEL') ? 1 : 0;
+
+  $config = \Drupal::config('appointment_notifications.settings');
+  $organizer_email = $config->get('email_sender') ?: 'no-reply@example.com';
+  $site_name = \Drupal::config('system.site')->get('name') ?: 'MakeHaven';
+
+  $uid = 'appointment-' . $node->id() . '@makehaven.org';
+  $dtstamp = (new \DateTimeImmutable('now', new \DateTimeZone('UTC')))->format('Ymd\THis\Z');
+  $dtstart = $start->setTimezone(new \DateTimeZone('UTC'))->format('Ymd\THis\Z');
+  $dtend = $end->setTimezone(new \DateTimeZone('UTC'))->format('Ymd\THis\Z');
+
+  $summary = _appointment_notifications_ics_escape($node->getTitle());
+  $description_parts = [];
+
+  if (!empty($context['date']) && !empty($context['time']) && $context['time'] !== 'Time not specified') {
+    $description_parts[] = 'When: ' . $context['date'] . ' at ' . $context['time'];
+  }
+
+  if (!empty($context['purpose']) && $context['purpose'] !== 'No purpose provided') {
+    $description_parts[] = 'Purpose: ' . $context['purpose'];
+  }
+
+  if (!empty($context['note']) && $context['note'] !== 'No additional notes') {
+    $description_parts[] = 'Notes: ' . $context['note'];
+  }
+
+  if (!empty($context['link'])) {
+    $description_parts[] = 'Details: ' . $context['link'];
+  }
+
+  $description = !empty($description_parts)
+    ? _appointment_notifications_ics_escape(implode("\n", $description_parts))
+    : '';
+
+  $lines = [
+    'BEGIN:VCALENDAR',
+    'VERSION:2.0',
+    'PRODID:-//MakeHaven//Appointment Notifications//EN',
+    'CALSCALE:GREGORIAN',
+    'METHOD:' . $method,
+    'BEGIN:VEVENT',
+    'UID:' . $uid,
+    'SEQUENCE:' . $sequence,
+    'DTSTAMP:' . $dtstamp,
+    'DTSTART:' . $dtstart,
+    'DTEND:' . $dtend,
+    'STATUS:' . $status,
+    'SUMMARY:' . $summary,
+  ];
+
+  if (!empty($description)) {
+    $lines[] = 'DESCRIPTION:' . $description;
+  }
+
+  $lines[] = 'ORGANIZER;CN=' . _appointment_notifications_ics_escape($site_name) . ':mailto:' . $organizer_email;
+
+  foreach ($participants as $participant) {
+    if (empty($participant['email'])) {
+      continue;
+    }
+    $participant_name = !empty($participant['name']) ? $participant['name'] : $participant['email'];
+    $lines[] = 'ATTENDEE;CN=' . _appointment_notifications_ics_escape($participant_name) . ';ROLE=REQ-PARTICIPANT:mailto:' . $participant['email'];
+  }
+
+  if (!empty($context['link'])) {
+    $lines[] = 'URL:' . _appointment_notifications_ics_escape($context['link']);
+  }
+
+  $lines[] = 'TRANSP:OPAQUE';
+  $lines[] = 'END:VEVENT';
+  $lines[] = 'END:VCALENDAR';
+
+  $content = implode("\r\n", $lines) . "\r\n";
+
+  return [
+    'filename' => 'appointment-' . $node->id() . '.ics',
+    'filecontent' => $content,
+    'filemime' => 'text/calendar; charset=UTF-8; method=' . $method,
+  ];
+}
+
+
 function _appointment_notifications_send_email(Node $node, $action) {
   $mailManager = \Drupal::service('plugin.manager.mail');
   $config = \Drupal::config('appointment_notifications.settings');
@@ -85,57 +409,12 @@ function _appointment_notifications_send_email(Node $node, $action) {
   // Slack Team ID
   $slack_team_id = 'T02DJKD4B'; // Replace with your actual Slack Team ID
 
-  // Prepare badge names.
-  $badge_names = [];
-  if ($node->hasField('field_appointment_badges') && !$node->get('field_appointment_badges')->isEmpty()) {
-    foreach ($node->get('field_appointment_badges')->referencedEntities() as $badge) {
-      $badge_names[] = $badge->label();
-    }
-  }
-
-  // Format the appointment date without time zone conversion.
-  $raw_date = $node->get('field_appointment_date')->value ?? '';
-  $formatted_date = 'No date provided';
-  if (!empty($raw_date)) {
-    $date = new \DateTime($raw_date);
-    $formatted_date = $date->format('l, F j, Y');
-  }
-
-  // Define $site_timezone before using it in time calculations.
-  $site_timezone = \Drupal::config('system.date')->get('timezone.default') ?: 'UTC';
-
-  // Calculate the appointment time.
-  $appointment_time = 'Time not specified';
-  $host_start_time_raw = $node->hasField('field_host_start_time') && !$node->get('field_host_start_time')->isEmpty()
-    ? $node->get('field_host_start_time')->value
-    : \Drupal::request()->query->get('start_time');
-
-  if (!empty($host_start_time_raw) && $node->hasField('field_appointment_slot') && !$node->get('field_appointment_slot')->isEmpty()) {
-    $selected_slots = $node->get('field_appointment_slot')->getValue();
-    $slot_keys = array_column($selected_slots, 'value');
-    $slot_offsets = [
-      '1'   => 0,
-      '1-5' => 30,
-      '2'   => 60,
-      '2-5' => 90,
-      '3'   => 120,
-      '3-5' => 150,
-    ];
-
-    $first_slot = reset($slot_keys);
-    $offset_minutes = $slot_offsets[$first_slot] ?? null;
-
-    if ($offset_minutes !== null) {
-      try {
-        // Parse the start time as site timezone, not UTC
-        $start_time = new \DateTime($host_start_time_raw, new \DateTimeZone($site_timezone));
-        $start_time->modify("+$offset_minutes minutes");
-        $appointment_time = $start_time->format('g:i A');
-      } catch (\Exception $e) {
-        \Drupal::logger('appointment_notifications')->error('Error calculating appointment time: @message', ['@message' => $e->getMessage()]);
-      }
-    }
-  }
+  $request_stack = \Drupal::service('request_stack');
+  $current_request = $request_stack->getCurrentRequest();
+  $start_time_override = $current_request ? $current_request->query->get('start_time') : NULL;
+  $schedule_details = _appointment_notifications_get_schedule_details($node, $start_time_override);
+  $formatted_date = $schedule_details['date'];
+  $appointment_time = $schedule_details['time'];
 
   /**
    * Helper function to load the user's profile and get a field value.
@@ -158,8 +437,9 @@ function _appointment_notifications_send_email(Node $node, $action) {
 
   // Prepare the member's email, name, and Slack ID.
   $member_user = $node->getOwner();
-  $member_email = $member_user->getEmail() ?? 'No email available';
-  $member_name = $member_user->getDisplayName() ?? 'Not specified';
+  $member_email = ($member_user && $member_user->getEmail()) ? $member_user->getEmail() : '';
+  $member_email_display = $member_email ?: 'No email available';
+  $member_name = $member_user ? $member_user->getDisplayName() : 'Not specified';
   $member_slack_id = _get_profile_field_value($member_user, 'main', 'field_member_slack_id_number');
   $member_slack_link = $member_slack_id && $member_slack_id !== 'Not available'
       ? 'https://makehaven.slack.com/team/' . $member_slack_id
@@ -170,7 +450,8 @@ function _appointment_notifications_send_email(Node $node, $action) {
       ? $node->get('field_appointment_host')->entity
       : null;
 
-  $host_email = $host_user ? $host_user->getEmail() : 'No email available';
+  $host_email = ($host_user && $host_user->getEmail()) ? $host_user->getEmail() : '';
+  $host_email_display = $host_email ?: 'No email available';
   $host_name = $host_user ? $host_user->getDisplayName() : 'Not specified';
   $host_slack_id = $host_user ? _get_profile_field_value($host_user, 'main', 'field_member_slack_id_number') : 'Not available';
   $host_slack_link = $host_slack_id !== 'Not available'
@@ -182,94 +463,176 @@ function _appointment_notifications_send_email(Node $node, $action) {
 
   // [New Code] Determine if the 'checkout_instructions' should be included.
   $include_checkout_instructions = ($purpose === 'checkout');
+  $badge_names = [];
+  if ($node->hasField('field_appointment_badges') && !$node->get('field_appointment_badges')->isEmpty()) {
+    foreach ($node->get('field_appointment_badges')->referencedEntities() as $badge) {
+      $badge_names[] = $badge->label();
+    }
+  }
 
-  // Prepare replacements.
-  $replacements = [
+  $appointment_link = Url::fromRoute('entity.node.canonical', ['node' => $node->id()], ['absolute' => TRUE])->toString();
+  $appointment_feedback_value = $node->get('field_appointment_feedback')->value ?? 'No feedback available';
+  $appointment_result_value = $node->get('field_appointment_result')->value ?? 'No result provided';
+  $appointment_note_value = $node->get('field_appointment_note')->value ?? 'No additional notes';
+
+  // Prepare replacements shared by all recipients.
+  $base_replacements = [
     '@title' => $node->getTitle(),
     '@date' => $formatted_date,
     '@time' => $appointment_time,
     '@purpose' => $purpose,
-    '@feedback' => $node->get('field_appointment_feedback')->value ?? 'No feedback available',
-    '@result' => $node->get('field_appointment_result')->value ?? 'No result provided',
-    '@link' => Url::fromRoute('entity.node.canonical', ['node' => $node->id()], ['absolute' => TRUE])->toString(),
+    '@feedback' => $appointment_feedback_value,
+    '@result' => $appointment_result_value,
+    '@link' => $appointment_link,
     '@feedback_link' => 'https://www.makehaven.org/appointment/feedback',
-    '@scheduled_by' => $member_name,
+    '@scheduled_by' => $member_name ?? 'Not specified',
     '@badges' => !empty($badge_names) ? implode(', ', $badge_names) : 'None selected',
-    '@note' => $node->get('field_appointment_note')->value ?? 'No additional notes',
-    '@volunteer_name' => $host_name ?? 'Not specified',
-    '@recipient_name' => $member_name ?? 'Not specified',
-    '@member_email' => $member_email,
+    '@note' => $appointment_note_value,
+    '@volunteer_name' => $host_name ?: 'Not specified',
+    '@member_email' => $member_email_display,
     '@member_slack_id' => $member_slack_id,
     '@member_slack_link' => $member_slack_link,
-    '@host_email' => $host_email,
+    '@host_email' => $host_email_display,
     '@host_slack_id' => $host_slack_id,
     '@host_slack_link' => $host_slack_link,
   ];
-
-  if ($action === 'member_scheduled' || $action === 'canceled') {
-    $replacements['@recipient_name'] = $member_name;
-  }
-
-  // [New Code] Initialize '@volunteer_name' if not set.
-  $replacements['@volunteer_name'] = $replacements['@volunteer_name'] ?? 'Not specified';
 
   // Load templates.
   $subject_template = $config->get("email_subject_$action") ?? 'Appointment Notification';
   $body_template = $config->get("email_body_$action") ?? 'Default email body content';
 
-  // [New Code] Process conditional blocks in the template.
+  // Process conditional blocks in the template.
   $body_template = _process_template_condition($body_template, 'checkout_instructions', $include_checkout_instructions);
 
-  // Replace tokens.
-  $subject = strtr($subject_template, $replacements);
-  $body = strtr($body_template, $replacements);
-
-  // Ensure subject and body are not empty.
-  $subject = trim($subject) ?: 'Appointment Notification';
-  $body = trim($body) ?: 'This is a fallback email body since the template content was empty.';
-
-  // Determine recipients.
-  $to = [];
-  if ($action === 'member_scheduled' || $action === 'canceled') {
-    $to[] = $member_email;
+  $participants = [];
+  if (!empty($member_email)) {
+    $participants[] = ['email' => $member_email, 'name' => $member_name];
   }
-  if ($action === 'host_scheduled' || $action === 'canceled') {
-    if ($host_user) {
-      $to[] = $host_user->getEmail();
-    }
+  if (!empty($host_email)) {
+    $participants[] = ['email' => $host_email, 'name' => $host_name];
   }
 
-  // Handle `cc` for canceled actions.
-  $cc = [];
-  if ($action === 'canceled') {
-    $cc[] = $member_email;
+  $calendar_context = [
+    'date' => $formatted_date,
+    'time' => $appointment_time,
+    'purpose' => $purpose,
+    'note' => trim(strip_tags($appointment_note_value)),
+    'link' => $appointment_link,
+  ];
+
+  $calendar_attachment = NULL;
+  if ($config->get('calendar_invites_enabled') && in_array($action, ['member_scheduled', 'host_scheduled', 'canceled'], TRUE)) {
+    $calendar_attachment = _appointment_notifications_build_calendar_attachment($node, $schedule_details, $action, $participants, $calendar_context);
   }
 
-  // Check recipients.
-  if (empty($to)) {
-    \Drupal::logger('appointment_notifications')->warning('No recipients found for action @action.', ['@action' => $action]);
-    return;
-  }
-
-  if ($email_logging) {
-    \Drupal::logger('appointment_notifications')->notice('Email to @recipients with subject "@subject". Body: @body', [
-      '@recipients' => implode(', ', $to),
-      '@subject' => $subject,
-      '@body' => $body,
-    ]);
-  }
-
-  if (!$development_mode) {
-    foreach ($to as $recipient) {
-      $params = ['subject' => $subject, 'message' => $body, 'cc' => implode(', ', $cc)];
-      $result = $mailManager->mail($module, $key, $recipient, $language, $params, $sender);
-      if ($result['result'] !== true) {
-        \Drupal::logger('appointment_notifications')->error('Failed to send email to @recipient for action @action', [
-          '@recipient' => $recipient, '@action' => $action,
-        ]);
+  // Build recipient definitions.
+  $recipient_definitions = [];
+  switch ($action) {
+    case 'member_scheduled':
+    case 'member_reminder':
+      if (!empty($member_email)) {
+        $recipient_definitions[] = [
+          'email' => $member_email,
+          'name' => $member_name ?: 'Member',
+          'cc' => [],
+        ];
       }
+      break;
+
+    case 'host_scheduled':
+    case 'host_reminder':
+      if (!empty($host_email)) {
+        $recipient_definitions[] = [
+          'email' => $host_email,
+          'name' => $host_name ?: 'Volunteer',
+          'cc' => [],
+        ];
+      }
+      break;
+
+    case 'canceled':
+      if (!empty($member_email)) {
+        $recipient_definitions[] = [
+          'email' => $member_email,
+          'name' => $member_name ?: 'Member',
+          'cc' => [],
+        ];
+      }
+      if (!empty($host_email)) {
+        $cc_list = !empty($member_email) ? [$member_email] : [];
+        $recipient_definitions[] = [
+          'email' => $host_email,
+          'name' => $host_name ?: 'Volunteer',
+          'cc' => $cc_list,
+        ];
+      }
+      break;
+
+    default:
+      if (!empty($member_email)) {
+        $recipient_definitions[] = [
+          'email' => $member_email,
+          'name' => $member_name ?: 'Member',
+          'cc' => [],
+        ];
+      }
+      break;
+  }
+
+  if (empty($recipient_definitions)) {
+    \Drupal::logger('appointment_notifications')->warning('No recipients found for action @action.', ['@action' => $action]);
+    return FALSE;
+  }
+
+  $any_success = FALSE;
+
+  foreach ($recipient_definitions as $recipient) {
+    $recipient_name = !empty($recipient['name']) ? $recipient['name'] : 'Not specified';
+    $replacements = $base_replacements + [
+      '@recipient_name' => $recipient_name,
+    ];
+
+    $subject = strtr($subject_template, $replacements);
+    $body = strtr($body_template, $replacements);
+
+    $subject = trim($subject) ?: 'Appointment Notification';
+    $body = trim($body) ?: 'This is a fallback email body since the template content was empty.';
+
+    if ($email_logging) {
+      \Drupal::logger('appointment_notifications')->notice('Email (@action) prepared for @recipient with subject "@subject". Body: @body', [
+        '@action' => $action,
+        '@recipient' => $recipient['email'],
+        '@subject' => $subject,
+        '@body' => $body,
+      ]);
+    }
+
+    if ($development_mode) {
+      $any_success = TRUE;
+      continue;
+    }
+
+    $params = [
+      'subject' => $subject,
+      'message' => $body,
+      'cc' => !empty($recipient['cc']) ? implode(', ', $recipient['cc']) : '',
+    ];
+    if ($calendar_attachment) {
+      $params['attachments'] = [$calendar_attachment];
+    }
+    $result = $mailManager->mail($module, $key, $recipient['email'], $language, $params, $sender);
+    if (!empty($result['result'])) {
+      $any_success = TRUE;
+    }
+    else {
+      \Drupal::logger('appointment_notifications')->error('Failed to send email to @recipient for action @action', [
+        '@recipient' => $recipient['email'],
+        '@action' => $action,
+      ]);
     }
   }
+
+  return $any_success;
 }
 
 
@@ -282,20 +645,65 @@ function _appointment_notifications_send_email(Node $node, $action) {
  * Implements hook_cron().
  */
 function appointment_notifications_cron() {
-  $yesterday = new \DateTime('yesterday', new \DateTimeZone('UTC'));
-  $yesterday_start = $yesterday->format('Y-m-d\T00:00:00');
-  $yesterday_end = $yesterday->format('Y-m-d\T23:59:59');
+  $config = \Drupal::config('appointment_notifications.settings');
+  $site_timezone = \Drupal::config('system.date')->get('timezone.default') ?: 'UTC';
+  $now = new \DateTime('now', new \DateTimeZone($site_timezone));
+  $feedback_date = (clone $now)->modify('-1 day')->format('Y-m-d');
 
-  $query = \Drupal::entityQuery('node')
+  $nids = \Drupal::entityQuery('node')
     ->condition('type', 'appointment')
-    ->condition('field_appointment_date', $yesterday_start, '>=')
-    ->condition('field_appointment_date', $yesterday_end, '<=');
+    ->condition('field_appointment_status', 'scheduled')
+    ->condition('field_appointment_date', $feedback_date)
+    ->execute();
 
-  $nids = $query->execute();
+  if (empty($nids)) {
+    return;
+  }
+
   $nodes = Node::loadMultiple($nids);
 
   foreach ($nodes as $node) {
-    _appointment_notifications_send_feedback_invitation($node);
+    if (_appointment_notifications_should_send($node, 'feedback', $feedback_date)) {
+      if (_appointment_notifications_send_feedback_invitation($node)) {
+        _appointment_notifications_mark_sent($node, 'feedback', $feedback_date);
+      }
+    }
+  }
+
+  if ($config->get('reminder_enabled')) {
+    $days_before = (int) ($config->get('reminder_days_before') ?? 1);
+    $days_before = max(1, $days_before);
+    $reminder_date = (clone $now)->modify('+' . $days_before . ' day')->format('Y-m-d');
+
+    $reminder_nids = \Drupal::entityQuery('node')
+      ->condition('type', 'appointment')
+      ->condition('field_appointment_status', 'scheduled')
+      ->condition('field_appointment_date', $reminder_date)
+      ->execute();
+
+    if (!empty($reminder_nids)) {
+      $reminder_nodes = Node::loadMultiple($reminder_nids);
+
+      foreach ($reminder_nodes as $node) {
+        $member = $node->getOwner();
+        if ($member && $member->getEmail() && _appointment_notifications_should_send($node, 'member_reminder', $reminder_date)) {
+          if (_appointment_notifications_send_email($node, 'member_reminder')) {
+            _appointment_notifications_mark_sent($node, 'member_reminder', $reminder_date);
+          }
+        }
+
+        $host_user = $node->hasField('field_appointment_host') && !$node->get('field_appointment_host')->isEmpty()
+          ? $node->get('field_appointment_host')->entity
+          : NULL;
+        $host_email = ($host_user && $host_user->getEmail()) ? $host_user->getEmail() : '';
+
+        if (!empty($host_email) && _appointment_notifications_should_send($node, 'host_reminder', $reminder_date)) {
+          if (_appointment_notifications_send_email($node, 'host_reminder')) {
+            _appointment_notifications_mark_sent($node, 'host_reminder', $reminder_date);
+          }
+        }
+      }
+    }
   }
 }
 
@@ -311,12 +719,23 @@ function _appointment_notifications_send_feedback_invitation(Node $node) {
   $sender = $config->get('email_sender');
   $development_mode = $config->get('development_mode');
   $email_logging = $config->get('email_logging');
-  $to = $node->getOwner()->getEmail();
+
+  $member = $node->getOwner();
+  if (!$member || !$member->getEmail()) {
+    \Drupal::logger('appointment_notifications')->warning('Unable to send feedback invitation for appointment @nid because the member has no email.', [
+      '@nid' => $node->id(),
+    ]);
+    return FALSE;
+  }
+
+  $schedule_details = _appointment_notifications_get_schedule_details($node);
 
   // Prepare replacements.
   $replacements = [
     '@title' => $node->getTitle(),
-    '@date' => $node->get('field_appointment_date')->value,
+    '@date' => $schedule_details['date'],
+    '@time' => $schedule_details['time'],
+    '@recipient_name' => $member->getDisplayName() ?: 'Member',
     '@link' => Url::fromRoute('entity.node.canonical', ['node' => $node->id()], ['absolute' => TRUE])->toString(),
     '@feedback_link' => 'https://www.makehaven.org/appointment/feedback',
   ];
@@ -334,22 +753,27 @@ function _appointment_notifications_send_feedback_invitation(Node $node) {
   $body = trim($body) ?: 'This is a fallback email body since the template content was empty.';
 
   if ($email_logging) {
-    \Drupal::logger('appointment_notifications')->notice('Feedback invitation to @recipient with subject "@subject". Body: @body', [
-      '@recipient' => $to,
+    \Drupal::logger('appointment_notifications')->notice('Feedback invitation prepared for @recipient with subject "@subject". Body: @body', [
+      '@recipient' => $member->getEmail(),
       '@subject' => $subject,
       '@body' => $body,
     ]);
   }
 
-  if (!$development_mode) {
-    $params = ['subject' => $subject, 'message' => $body];
-    $result = $mailManager->mail($module, $key, $to, $language, $params, $sender);
-    if ($result['result'] !== true) {
-      \Drupal::logger('appointment_notifications')->error('Failed to send feedback invitation to @recipient', [
-        '@recipient' => $to,
-      ]);
-    }
+  if ($development_mode) {
+    return TRUE;
   }
+
+  $params = ['subject' => $subject, 'message' => $body];
+  $result = $mailManager->mail($module, $key, $member->getEmail(), $language, $params, $sender);
+  if (!empty($result['result'])) {
+    return TRUE;
+  }
+
+  \Drupal::logger('appointment_notifications')->error('Failed to send feedback invitation to @recipient', [
+    '@recipient' => $member->getEmail(),
+  ]);
+  return FALSE;
 }
 
 /**
@@ -438,8 +862,13 @@ function appointment_notifications_mail($key, &$message, $params) {
     case 'appointment_canceled':
     case 'appointment_problem_notice':
     case 'appointment_feedback_invitation':
+    case 'appointment_member_reminder':
+    case 'appointment_host_reminder':
       $message['subject'] = $params['subject'];
       $message['body'][] = $params['message'];
+      if (!empty($params['attachments'])) {
+        $message['attachments'] = $params['attachments'];
+      }
       break;
 
     default:

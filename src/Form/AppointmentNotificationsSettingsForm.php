@@ -181,6 +181,97 @@ class AppointmentNotificationsSettingsForm extends ConfigFormBase {
       '#description' => $this->t('Use placeholders like @title, @date, @link, @feedback_link, etc.'),
     ];
 
+    $form['reminder'] = [
+      '#type' => 'fieldset',
+      '#title' => $this->t('Reminder Emails'),
+      '#tree' => TRUE,
+      '#collapsible' => TRUE,
+      '#collapsed' => FALSE,
+      '#description' => $this->t('Configure optional reminder emails that are sent before the appointment date.'),
+    ];
+
+    $form['reminder']['reminder_enabled'] = [
+      '#type' => 'checkbox',
+      '#title' => $this->t('Enable reminder emails'),
+      '#default_value' => $config->get('reminder_enabled'),
+      '#description' => $this->t('When enabled, reminder emails are sent to the member and host before the appointment.'),
+    ];
+
+    $form['reminder']['reminder_days_before'] = [
+      '#type' => 'number',
+      '#title' => $this->t('Days before appointment'),
+      '#default_value' => $config->get('reminder_days_before') ?? 1,
+      '#min' => 1,
+      '#description' => $this->t('Reminders are sent this many days before the appointment date.'),
+      '#states' => [
+        'disabled' => [
+          ':input[name="reminder[reminder_enabled]"]' => ['checked' => FALSE],
+        ],
+      ],
+    ];
+
+    $form['reminder']['email_subject_member_reminder'] = [
+      '#type' => 'textfield',
+      '#title' => $this->t('Subject for Member Reminder Email'),
+      '#default_value' => $config->get('email_subject_member_reminder'),
+      '#states' => [
+        'disabled' => [
+          ':input[name="reminder[reminder_enabled]"]' => ['checked' => FALSE],
+        ],
+      ],
+    ];
+
+    $form['reminder']['email_body_member_reminder'] = [
+      '#type' => 'textarea',
+      '#title' => $this->t('Body for Member Reminder Email'),
+      '#default_value' => $config->get('email_body_member_reminder'),
+      '#description' => $this->t('Use placeholders like @recipient_name, @title, @date, @time, @link, etc.'),
+      '#states' => [
+        'disabled' => [
+          ':input[name="reminder[reminder_enabled]"]' => ['checked' => FALSE],
+        ],
+      ],
+    ];
+
+    $form['reminder']['email_subject_host_reminder'] = [
+      '#type' => 'textfield',
+      '#title' => $this->t('Subject for Host Reminder Email'),
+      '#default_value' => $config->get('email_subject_host_reminder'),
+      '#states' => [
+        'disabled' => [
+          ':input[name="reminder[reminder_enabled]"]' => ['checked' => FALSE],
+        ],
+      ],
+    ];
+
+    $form['reminder']['email_body_host_reminder'] = [
+      '#type' => 'textarea',
+      '#title' => $this->t('Body for Host Reminder Email'),
+      '#default_value' => $config->get('email_body_host_reminder'),
+      '#description' => $this->t('Use placeholders like @recipient_name, @scheduled_by, @date, @time, @member_email, @link, etc.'),
+      '#states' => [
+        'disabled' => [
+          ':input[name="reminder[reminder_enabled]"]' => ['checked' => FALSE],
+        ],
+      ],
+    ];
+
+    $form['calendar_invites'] = [
+      '#type' => 'fieldset',
+      '#title' => $this->t('Calendar Invitations'),
+      '#tree' => TRUE,
+      '#collapsible' => TRUE,
+      '#collapsed' => FALSE,
+      '#description' => $this->t('Attach iCalendar (`.ics`) files to scheduling and cancellation emails so recipients can add or remove the appointment in their calendars.'),
+    ];
+
+    $form['calendar_invites']['calendar_invites_enabled'] = [
+      '#type' => 'checkbox',
+      '#title' => $this->t('Enable calendar invitations'),
+      '#default_value' => $config->get('calendar_invites_enabled'),
+      '#description' => $this->t('When enabled, `.ics` files are attached to initial scheduling emails and their cancellations.'),
+    ];
+
     $form['email_logging'] = [
       '#type' => 'checkbox',
       '#title' => $this->t('Enable Email Logging'),
@@ -225,6 +316,13 @@ class AppointmentNotificationsSettingsForm extends ConfigFormBase {
       ->set('email_body_canceled', $form_state->getValue(['canceled', 'email_body_canceled']))
       ->set('email_subject_feedback_invitation', $form_state->getValue(['feedback_invitation', 'email_subject_feedback_invitation']))
       ->set('email_body_feedback_invitation', $form_state->getValue(['feedback_invitation', 'email_body_feedback_invitation']))
+      ->set('reminder_enabled', $form_state->getValue(['reminder', 'reminder_enabled']))
+      ->set('reminder_days_before', (int) $form_state->getValue(['reminder', 'reminder_days_before']))
+      ->set('email_subject_member_reminder', $form_state->getValue(['reminder', 'email_subject_member_reminder']))
+      ->set('email_body_member_reminder', $form_state->getValue(['reminder', 'email_body_member_reminder']))
+      ->set('email_subject_host_reminder', $form_state->getValue(['reminder', 'email_subject_host_reminder']))
+      ->set('email_body_host_reminder', $form_state->getValue(['reminder', 'email_body_host_reminder']))
+      ->set('calendar_invites_enabled', $form_state->getValue(['calendar_invites', 'calendar_invites_enabled']))
       ->set('email_logging', $form_state->getValue('email_logging'))
       ->set('development_mode', $form_state->getValue('development_mode'))
       ->save();

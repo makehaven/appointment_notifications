@@ -32,6 +32,9 @@ appointment_notifications.settings:
     email_body_canceled:
       type: text
       label: 'Body for Canceled Appointment Email'
+    email_logging:
+      type: boolean
+      label: 'Enable Email Logging'
     development_mode:
       type: boolean
       label: 'Enable Development Mode'
@@ -41,3 +44,24 @@ appointment_notifications.settings:
     email_body_feedback_invitation:
       type: text
       label: 'Body for Feedback Invitation Email'
+    reminder_enabled:
+      type: boolean
+      label: 'Enable Reminder Emails'
+    reminder_days_before:
+      type: integer
+      label: 'Days Before Appointment to Send Reminder'
+    email_subject_member_reminder:
+      type: string
+      label: 'Subject for Member Reminder Email'
+    email_body_member_reminder:
+      type: text
+      label: 'Body for Member Reminder Email'
+    email_subject_host_reminder:
+      type: string
+      label: 'Subject for Host Reminder Email'
+    email_body_host_reminder:
+      type: text
+      label: 'Body for Host Reminder Email'
+    calendar_invites_enabled:
+      type: boolean
+      label: 'Enable Calendar Invite Attachments'
