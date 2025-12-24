@@ -654,6 +654,7 @@ function appointment_notifications_cron() {
     ->condition('type', 'appointment')
     ->condition('field_appointment_status', 'scheduled')
     ->condition('field_appointment_date', $feedback_date)
+    ->accessCheck(FALSE)
     ->execute();
 
   if (empty($nids)) {
@@ -679,6 +680,7 @@ function appointment_notifications_cron() {
       ->condition('type', 'appointment')
       ->condition('field_appointment_status', 'scheduled')
       ->condition('field_appointment_date', $reminder_date)
+      ->accessCheck(FALSE)
       ->execute();
 
     if (!empty($reminder_nids)) {
