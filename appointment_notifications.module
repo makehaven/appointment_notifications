@@ -209,6 +209,21 @@ function _appointment_notifications_get_schedule_details(Node $node, $start_time
 }
 
 /**
+ * Builds the absolute feedback URL for appointment follow-ups.
+ *
+ * @return string
+ *   The feedback URL as a string.
+ */
+function _appointment_notifications_feedback_link(): string {
+  try {
+    return Url::fromUserInput('/appointments/feedback', ['absolute' => TRUE])->toString();
+  }
+  catch (\Exception $e) {
+    return '/appointments/feedback';
+  }
+}
+
+/**
  * Converts Smart Date raw values (timestamp or string) to DateTimeImmutable.
  *
  * @param string|int $value
@@ -484,7 +499,7 @@ function _appointment_notifications_send_email(Node $node, $action) {
     '@feedback' => $appointment_feedback_value,
     '@result' => $appointment_result_value,
     '@link' => $appointment_link,
-    '@feedback_link' => 'https://www.makehaven.org/appointment/feedback',
+    '@feedback_link' => _appointment_notifications_feedback_link(),
     '@scheduled_by' => $member_name ?? 'Not specified',
     '@badges' => !empty($badge_names) ? implode(', ', $badge_names) : 'None selected',
     '@note' => $appointment_note_value,
@@ -739,7 +754,7 @@ function _appointment_notifications_send_feedback_invitation(Node $node) {
     '@time' => $schedule_details['time'],
     '@recipient_name' => $member->getDisplayName() ?: 'Member',
     '@link' => Url::fromRoute('entity.node.canonical', ['node' => $node->id()], ['absolute' => TRUE])->toString(),
-    '@feedback_link' => 'https://www.makehaven.org/appointment/feedback',
+    '@feedback_link' => _appointment_notifications_feedback_link(),
   ];
 
   // Load templates.
