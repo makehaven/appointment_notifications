@@ -46,7 +46,7 @@ function appointment_notifications_entity_update(Drupal\Core\Entity\EntityInterf
       $current_result = $entity->get('field_appointment_result')->value;
   
       // Define problem states.
-      $problem_states = ['volunteer_absent', 'met_unsuccessful'];
+      $problem_states = ['volunteer_absent', 'met_unsuccesful'];
   
       // Check if the result field has changed from a non-problem state to a problem state.
       if (!in_array($original_result, $problem_states) && in_array($current_result, $problem_states)) {
@@ -121,7 +121,7 @@ function _appointment_notifications_get_schedule_details(Node $node, $start_time
   }
   if (!empty($raw_date)) {
     try {
-      $date = new \DateTime($raw_date);
+      $date = new \DateTimeImmutable($raw_date . ' 00:00:00', new \DateTimeZone($site_timezone));
       $formatted_date = $date->format('l, F j, Y');
       $date_only_string = $date->format('Y-m-d');
     }
@@ -214,11 +214,17 @@ function _appointment_notifications_get_schedule_details(Node $node, $start_time
  * @return string
  *   The feedback URL as a string.
  */
-function _appointment_notifications_feedback_link(): string {
+function _appointment_notifications_feedback_link(?Node $node = NULL): string {
   try {
+    if ($node) {
+      return Url::fromRoute('appointment_notifications.feedback_form', ['node' => $node->id()], ['absolute' => TRUE])->toString();
+    }
     return Url::fromUserInput('/appointments/feedback', ['absolute' => TRUE])->toString();
   }
   catch (\Exception $e) {
+    if ($node) {
+      return '/appointment/' . $node->id() . '/feedback';
+    }
     return '/appointments/feedback';
   }
 }
@@ -499,7 +505,7 @@ function _appointment_notifications_send_email(Node $node, $action) {
     '@feedback' => $appointment_feedback_value,
     '@result' => $appointment_result_value,
     '@link' => $appointment_link,
-    '@feedback_link' => _appointment_notifications_feedback_link(),
+    '@feedback_link' => _appointment_notifications_feedback_link($node),
     '@scheduled_by' => $member_name ?? 'Not specified',
     '@badges' => !empty($badge_names) ? implode(', ', $badge_names) : 'None selected',
     '@note' => $appointment_note_value,
@@ -667,21 +673,19 @@ function appointment_notifications_cron() {
 
   $nids = \Drupal::entityQuery('node')
     ->condition('type', 'appointment')
-    ->condition('field_appointment_status', 'scheduled')
+    ->condition('field_appointment_status', 'canceled', '<>')
     ->condition('field_appointment_date', $feedback_date)
     ->accessCheck(FALSE)
     ->execute();
 
-  if (empty($nids)) {
-    return;
-  }
+  if (!empty($nids)) {
+    $nodes = Node::loadMultiple($nids);
 
-  $nodes = Node::loadMultiple($nids);
-
-  foreach ($nodes as $node) {
-    if (_appointment_notifications_should_send($node, 'feedback', $feedback_date)) {
-      if (_appointment_notifications_send_feedback_invitation($node)) {
-        _appointment_notifications_mark_sent($node, 'feedback', $feedback_date);
+    foreach ($nodes as $node) {
+      if (_appointment_notifications_should_send($node, 'feedback', $feedback_date)) {
+        if (_appointment_notifications_send_feedback_invitation($node)) {
+          _appointment_notifications_mark_sent($node, 'feedback', $feedback_date);
+        }
       }
     }
   }
@@ -754,7 +758,7 @@ function _appointment_notifications_send_feedback_invitation(Node $node) {
     '@time' => $schedule_details['time'],
     '@recipient_name' => $member->getDisplayName() ?: 'Member',
     '@link' => Url::fromRoute('entity.node.canonical', ['node' => $node->id()], ['absolute' => TRUE])->toString(),
-    '@feedback_link' => _appointment_notifications_feedback_link(),
+    '@feedback_link' => _appointment_notifications_feedback_link($node),
   ];
 
   // Load templates.
