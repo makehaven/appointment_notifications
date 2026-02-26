@@ -71,6 +71,13 @@ class AppointmentCancelLinkTest extends KernelTestBase {
     ]);
     $host->save();
 
+    $attendee = User::create([
+      'name' => 'cancel_attendee',
+      'mail' => 'cancel-attendee@example.com',
+      'status' => 1,
+    ]);
+    $attendee->save();
+
     $appointment = Node::create([
       'type' => 'appointment',
       'title' => 'Cancel Link Test',
@@ -79,6 +86,7 @@ class AppointmentCancelLinkTest extends KernelTestBase {
       'field_appointment_status' => 'scheduled',
       'field_appointment_date' => ['value' => '2026-03-10'],
       'field_appointment_host' => ['target_id' => $host->id()],
+      'field_appointment_attendees' => [['target_id' => $attendee->id()]],
       'field_reservation_cancellation' => [],
     ]);
     $appointment->save();
@@ -117,6 +125,11 @@ class AppointmentCancelLinkTest extends KernelTestBase {
     $this->assertSame('canceled', (string) $reloaded->get('field_appointment_status')->value);
     $cancel_values = array_column($reloaded->get('field_reservation_cancellation')->getValue(), 'value');
     $this->assertContains('Cancel', $cancel_values);
+
+    $labels = _appointment_notifications_cancel_recipient_labels($reloaded);
+    $this->assertContains('cancel-member@example.com', implode(' ', $labels));
+    $this->assertContains('cancel-host@example.com', implode(' ', $labels));
+    $this->assertContains('cancel-attendee@example.com', implode(' ', $labels));
   }
 
   /**
@@ -188,6 +201,76 @@ class AppointmentCancelLinkTest extends KernelTestBase {
   }
 
   /**
+   * Verifies canceled notifications are sent to all impacted recipients.
+   */
+  public function testCanceledEmailIncludesAttendees(): void {
+    \Drupal::configFactory()->getEditable('system.mail')
+      ->set('interface.default', 'test_mail_collector')
+      ->save();
+
+    \Drupal::configFactory()->getEditable('appointment_notifications.settings')
+      ->set('development_mode', FALSE)
+      ->set('email_logging', FALSE)
+      ->set('calendar_invites_enabled', FALSE)
+      ->save();
+
+    $member = User::create([
+      'name' => 'cancel_notify_member',
+      'mail' => 'cancel-notify-member@example.com',
+      'status' => 1,
+    ]);
+    $member->save();
+
+    $host = User::create([
+      'name' => 'cancel_notify_host',
+      'mail' => 'cancel-notify-host@example.com',
+      'status' => 1,
+    ]);
+    $host->save();
+
+    $attendee = User::create([
+      'name' => 'cancel_notify_attendee',
+      'mail' => 'cancel-notify-attendee@example.com',
+      'status' => 1,
+    ]);
+    $attendee->save();
+
+    $appointment = Node::create([
+      'type' => 'appointment',
+      'title' => 'Cancel Notify Test',
+      'uid' => $member->id(),
+      'status' => 1,
+      'field_appointment_status' => 'scheduled',
+      'field_appointment_date' => ['value' => '2026-03-12'],
+      'field_appointment_host' => ['target_id' => $host->id()],
+      'field_appointment_attendees' => [['target_id' => $attendee->id()]],
+      'field_reservation_cancellation' => [],
+      'field_appointment_purpose' => 'checkout',
+      'field_appointment_feedback' => '',
+      'field_appointment_result' => 'met_successful',
+      'field_appointment_note' => '',
+    ]);
+    $appointment->save();
+
+    // Clear insert-time scheduled mails so this assertion only checks cancel.
+    $this->container->get('state')->set('system.test_mail_collector', []);
+
+    $appointment->set('field_appointment_status', 'canceled');
+    $appointment->save();
+
+    $emails = $this->container->get('state')->get('system.test_mail_collector', []);
+    $this->assertCount(3, $emails, 'Cancellation sends to member, host, and attendee.');
+
+    $recipients = array_map(static fn(array $mail): string => (string) ($mail['to'] ?? ''), $emails);
+    sort($recipients);
+    $this->assertSame([
+      'cancel-notify-attendee@example.com',
+      'cancel-notify-host@example.com',
+      'cancel-notify-member@example.com',
+    ], $recipients);
+  }
+
+  /**
    * Extracts token params from generated cancel URL.
    */
   protected function extractTokenParts(string $cancel_link): array {
@@ -219,6 +302,9 @@ class AppointmentCancelLinkTest extends KernelTestBase {
 
     $this->ensureField('field_appointment_host', 'entity_reference', ['target_type' => 'user']);
     $this->attachField('field_appointment_host', 'Appointment host', ['handler' => 'default']);
+
+    $this->ensureField('field_appointment_attendees', 'entity_reference', ['target_type' => 'user']);
+    $this->attachField('field_appointment_attendees', 'Appointment attendees', ['handler' => 'default']);
 
     $this->ensureField('field_appointment_purpose', 'string', ['max_length' => 255]);
     $this->attachField('field_appointment_purpose', 'Appointment purpose');

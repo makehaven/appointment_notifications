@@ -40,12 +40,20 @@ final class CancelAppointmentByLinkForm extends ConfirmFormBase {
     }
 
     $details = _appointment_notifications_get_schedule_details($this->appointment);
+    $recipient_labels = function_exists('_appointment_notifications_cancel_recipient_labels')
+      ? _appointment_notifications_cancel_recipient_labels($this->appointment)
+      : [];
+    $recipient_text = !empty($recipient_labels)
+      ? implode(', ', $recipient_labels)
+      : (string) $this->t('all impacted participants');
+
     return $this->t(
-      'This will cancel "@title" on @date at @time and notify both member and facilitator.',
+      'This will cancel "@title" on @date at @time. Notification emails will be sent to: @recipients.',
       [
         '@title' => $this->appointment->getTitle(),
         '@date' => $details['date'] ?? $this->t('Unknown date'),
         '@time' => $details['time'] ?? $this->t('Unknown time'),
+        '@recipients' => $recipient_text,
       ]
     );
   }
@@ -105,7 +113,15 @@ final class CancelAppointmentByLinkForm extends ConfirmFormBase {
     }
 
     if (_appointment_notifications_cancel_appointment($this->appointment)) {
-      $this->messenger()->addStatus($this->t('Appointment canceled. Notifications were sent to both parties.'));
+      $recipient_labels = function_exists('_appointment_notifications_cancel_recipient_labels')
+        ? _appointment_notifications_cancel_recipient_labels($this->appointment)
+        : [];
+      $recipient_text = !empty($recipient_labels)
+        ? implode(', ', $recipient_labels)
+        : (string) $this->t('all impacted participants');
+      $this->messenger()->addStatus($this->t('Appointment canceled. Notifications were sent to: @recipients.', [
+        '@recipients' => $recipient_text,
+      ]));
     }
     else {
       $this->messenger()->addStatus($this->t('This appointment was already canceled.'));

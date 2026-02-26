@@ -483,6 +483,66 @@ function _appointment_notifications_cancel_recipient(Node $node, string $audienc
 }
 
 /**
+ * Returns all impacted recipients for cancellation notifications.
+ *
+ * Includes member, facilitator, and any additional attendees on the
+ * appointment node that have an email address.
+ *
+ * @param \Drupal\node\Entity\Node $node
+ *   The appointment node.
+ *
+ * @return array<int, array{email: string, name: string}>
+ *   Unique recipients keyed by normalized email.
+ */
+function _appointment_notifications_cancel_recipients(Node $node): array {
+  $recipients = [];
+
+  $add_recipient = static function (array $recipient) use (&$recipients): void {
+    $email = mb_strtolower(trim((string) ($recipient['email'] ?? '')));
+    if ($email === '') {
+      return;
+    }
+    $name = trim((string) ($recipient['name'] ?? ''));
+    $recipients[$email] = [
+      'email' => $email,
+      'name' => $name !== '' ? $name : $email,
+    ];
+  };
+
+  $add_recipient(_appointment_notifications_cancel_recipient($node, 'member'));
+  $add_recipient(_appointment_notifications_cancel_recipient($node, 'host'));
+
+  if ($node->hasField('field_appointment_attendees') && !$node->get('field_appointment_attendees')->isEmpty()) {
+    foreach ($node->get('field_appointment_attendees')->referencedEntities() as $attendee) {
+      $email = method_exists($attendee, 'getEmail') ? (string) $attendee->getEmail() : '';
+      $name = method_exists($attendee, 'getDisplayName') ? (string) $attendee->getDisplayName() : '';
+      $add_recipient([
+        'email' => $email,
+        'name' => $name,
+      ]);
+    }
+  }
+
+  return array_values($recipients);
+}
+
+/**
+ * Returns a readable recipient list for cancellation confirmation UI.
+ */
+function _appointment_notifications_cancel_recipient_labels(Node $node): array {
+  $labels = [];
+  foreach (_appointment_notifications_cancel_recipients($node) as $recipient) {
+    $email = trim((string) ($recipient['email'] ?? ''));
+    if ($email === '') {
+      continue;
+    }
+    $name = trim((string) ($recipient['name'] ?? ''));
+    $labels[] = $name !== '' && $name !== $email ? $name . ' (' . $email . ')' : $email;
+  }
+  return $labels;
+}
+
+/**
  * Builds a signed cancel token for an appointment recipient.
  */
 function _appointment_notifications_cancel_token(Node $node, string $audience, int $expires, string $recipient_email): string {
@@ -931,19 +991,11 @@ function _appointment_notifications_send_email(Node $node, $action) {
       break;
 
     case 'canceled':
-      if (!empty($member_email)) {
+      foreach (_appointment_notifications_cancel_recipients($node) as $recipient) {
         $recipient_definitions[] = [
-          'email' => $member_email,
-          'name' => $member_name ?: 'Member',
+          'email' => $recipient['email'],
+          'name' => $recipient['name'],
           'cc' => [],
-        ];
-      }
-      if (!empty($host_email)) {
-        $cc_list = !empty($member_email) ? [$member_email] : [];
-        $recipient_definitions[] = [
-          'email' => $host_email,
-          'name' => $host_name ?: 'Volunteer',
-          'cc' => $cc_list,
         ];
       }
       break;
