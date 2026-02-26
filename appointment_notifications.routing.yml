@@ -13,3 +13,15 @@ appointment_notifications.feedback_form:
     _title: 'Appointment Feedback'
   requirements:
     _permission: 'access content'
+
+appointment_notifications.cancel_by_link:
+  path: '/appointment/{node}/cancel/{audience}/{expires}/{token}'
+  defaults:
+    _form: '\Drupal\appointment_notifications\Form\CancelAppointmentByLinkForm'
+    _title: 'Cancel Appointment'
+  requirements:
+    _custom_access: '\Drupal\appointment_notifications\Access\CancelAppointmentLinkAccess::access'
+  options:
+    parameters:
+      node:
+        type: entity:node

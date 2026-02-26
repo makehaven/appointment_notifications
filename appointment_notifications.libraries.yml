@@ -1,0 +1,9 @@
+appointment_cancel_action:
+  version: 1.x
+  css:
+    theme:
+      css/appointment-cancel-action.css: {}
+  js:
+    js/appointment-cancel-action.js: {}
+  dependencies:
+    - core/drupalSettings

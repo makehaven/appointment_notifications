@@ -11,7 +11,7 @@ The `appointment_notifications` module is a custom Drupal module designed to sen
 - **Problem Reporting Notifications**: Sends a notification to a designated staff email address when an issue is reported during an appointment, such as a volunteer being absent or the meeting being unsuccessful.
 - **Reminder Emails**: Optionally send reminder emails to the attendee and host a configurable number of days before the appointment date.
 - **Feedback Invitations**: Sends a follow-up email the day after the appointment date inviting the attendee to share feedback.
-- **Calendar Invites**: Attaches industry-standard `.ics` calendar files to scheduled and canceled appointment emails so members and hosts can add or remove the event from their calendars. The appointment time range field is used when available; otherwise the system falls back to slot-based estimates.
+- **Calendar Invites**: Attaches industry-standard `.ics` calendar files to scheduled and canceled appointment emails so members and hosts can add or remove the event from their calendars. Slot selections are used first (for exact appointment duration), then timerange data is used as a fallback.
 - **Development Mode**: When development mode is enabled, emails are logged and displayed on the screen instead of being sent.
 
 ## Installation
@@ -46,7 +46,7 @@ drush en appointment_notifications
 When an appointment is created or updated, the module will automatically send notifications:
 - **Scheduling**: When a new appointment is scheduled, the attendee and host will receive notifications.
 - **Cancellation**: When an appointment status changes from "scheduled" to "canceled," a notification will be sent to both the attendee and host, with the attendee CC'd in the host's email.
-- **Calendar Invites**: Scheduling emails include an `.ics` invite and cancellation emails send a cancellation update so recipients' calendars stay in sync. Ensure the appointment time range field is populated so the invite has accurate times.
+- **Calendar Invites**: Scheduling emails include an `.ics` invite and cancellation emails send a cancellation update so recipients' calendars stay in sync. Accurate slot selections and host start time produce the most precise invite window.
 - **Reminder**: When enabled, reminder emails are sent to the attendee and host the configured number of days before the appointment date.
 - **Problem Reporting**: If an appointment's result changes to a problem state (`volunteer_absent` or `met_unsuccessful`), a notification will be sent to the staff email address configured in the settings.
 - **Feedback Invitation**: The day after the appointment date, the attendee receives a single feedback invitation email.

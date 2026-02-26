@@ -42,6 +42,7 @@ class AppointmentNotificationsSettingsForm extends ConfigFormBase {
         <tr><td>@result</td><td>The result of the appointment.</td></tr>
         <tr><td>@link</td><td>A link to the appointment.</td></tr>
         <tr><td>@feedback_link</td><td>A link to the feedback form.</td></tr>
+        <tr><td>@cancel_link</td><td>A secure link that lets the recipient cancel the appointment.</td></tr>
         <tr><td>@scheduled_by</td><td>The name of the user who scheduled the appointment.</td></tr>
         <tr><td>@badges</td><td>The badges associated with the appointment.</td></tr>
         <tr><td>@note</td><td>The note for the appointment.</td></tr>
@@ -112,7 +113,7 @@ class AppointmentNotificationsSettingsForm extends ConfigFormBase {
       '#type' => 'textarea',
       '#title' => $this->t('Body for Member Scheduled Email'),
       '#default_value' => $config->get('email_body_member_scheduled'),
-      '#description' => $this->t('Use placeholders like @title, @date, @with, etc.'),
+      '#description' => $this->t('Use placeholders like @title, @date, @cancel_link, etc.'),
     ];
 
     $form['host_scheduled'] = [
@@ -134,7 +135,7 @@ class AppointmentNotificationsSettingsForm extends ConfigFormBase {
       '#type' => 'textarea',
       '#title' => $this->t('Body for Host Scheduled Email'),
       '#default_value' => $config->get('email_body_host_scheduled'),
-      '#description' => $this->t('Use placeholders like @title, @date, @with, etc.'),
+      '#description' => $this->t('Use placeholders like @title, @date, @cancel_link, etc.'),
     ];
 
     $form['canceled'] = [
@@ -225,7 +226,7 @@ class AppointmentNotificationsSettingsForm extends ConfigFormBase {
       '#type' => 'textarea',
       '#title' => $this->t('Body for Member Reminder Email'),
       '#default_value' => $config->get('email_body_member_reminder'),
-      '#description' => $this->t('Use placeholders like @recipient_name, @title, @date, @time, @link, etc.'),
+      '#description' => $this->t('Use placeholders like @recipient_name, @title, @date, @time, @link, @cancel_link, etc.'),
       '#states' => [
         'disabled' => [
           ':input[name="reminder[reminder_enabled]"]' => ['checked' => FALSE],
@@ -248,7 +249,7 @@ class AppointmentNotificationsSettingsForm extends ConfigFormBase {
       '#type' => 'textarea',
       '#title' => $this->t('Body for Host Reminder Email'),
       '#default_value' => $config->get('email_body_host_reminder'),
-      '#description' => $this->t('Use placeholders like @recipient_name, @scheduled_by, @date, @time, @member_email, @link, etc.'),
+      '#description' => $this->t('Use placeholders like @recipient_name, @scheduled_by, @date, @time, @member_email, @link, @cancel_link, etc.'),
       '#states' => [
         'disabled' => [
           ':input[name="reminder[reminder_enabled]"]' => ['checked' => FALSE],

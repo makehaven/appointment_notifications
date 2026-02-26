@@ -29,6 +29,7 @@ email_body_member_scheduled: |
   **Badges:** @badges
 
   View your appointment: @link
+  Cancel this appointment: @cancel_link
 
   After the session, please share feedback: @feedback_link
 
@@ -51,6 +52,7 @@ email_body_host_scheduled: |
   **Notes:** @note
 
   View details: @link
+  Cancel this appointment: @cancel_link
 
   Please prepare accordingly. If you have any questions, reach out.
 
@@ -97,6 +99,7 @@ email_body_member_reminder: |
   **Badges:** @badges
 
   View appointment: @link
+  Cancel appointment: @cancel_link
 
   If you can no longer attend, please update or cancel the appointment.
 
@@ -115,6 +118,7 @@ email_body_host_reminder: |
   **Notes:** @note
 
   View appointment: @link
+  Cancel appointment: @cancel_link
 
   Thank you for volunteering!
 

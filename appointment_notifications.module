@@ -3,6 +3,8 @@
 use Drupal\node\Entity\Node;
 use Drupal\Core\Mail\MailManagerInterface;
 use Drupal\Core\Url;
+use Drupal\Core\Site\Settings;
+use Drupal\Component\Utility\Crypt;
 
 /**
  * Implements hook_entity_insert().
@@ -58,6 +60,184 @@ function appointment_notifications_entity_update(Drupal\Core\Entity\EntityInterf
 }
 
 /**
+ * Implements hook_entity_view().
+ *
+ * Adds an explicit cancel action to appointment pages for the member or host.
+ */
+function appointment_notifications_entity_view(array &$build, Drupal\Core\Entity\EntityInterface $entity, $display = NULL, $view_mode = NULL) {
+  // Support both legacy/manual invocation and Drupal runtime hook signature.
+  if ($view_mode === NULL && is_string($display)) {
+    $view_mode = $display;
+  }
+
+  if (!($entity instanceof Node) || $entity->bundle() !== 'appointment' || $view_mode !== 'full') {
+    return;
+  }
+
+  $action = _appointment_notifications_build_cancel_action_element($entity);
+  if ($action) {
+    $build['appointment_cancel_action'] = $action;
+  }
+}
+
+/**
+ * Implements hook_preprocess_node().
+ *
+ * Ensures cancel action appears on appointment full pages even if entity_view
+ * hook ordering differs in the active hook/event dispatcher stack.
+ */
+function appointment_notifications_preprocess_node(array &$variables): void {
+  if (empty($variables['node']) || !($variables['node'] instanceof Node)) {
+    return;
+  }
+  if ($variables['node']->bundle() !== 'appointment') {
+    return;
+  }
+  if (($variables['view_mode'] ?? '') !== 'full') {
+    return;
+  }
+  $is_cancelled = FALSE;
+  $status_value = $variables['node']->hasField('field_appointment_status') ? (string) $variables['node']->get('field_appointment_status')->value : '';
+  if ($status_value === 'canceled') {
+    $is_cancelled = TRUE;
+  }
+  elseif ($variables['node']->hasField('field_reservation_cancellation') && !$variables['node']->get('field_reservation_cancellation')->isEmpty()) {
+    $cancel_values = array_column($variables['node']->get('field_reservation_cancellation')->getValue(), 'value');
+    $is_cancelled = in_array('Cancel', $cancel_values, TRUE);
+  }
+
+  if ($is_cancelled) {
+    $variables['attributes']['class'][] = 'appointment-is-canceled';
+    if (empty($variables['content']['appointment_cancel_notice'])) {
+      $variables['content']['appointment_cancel_notice'] = [
+        '#type' => 'container',
+        '#attributes' => ['class' => ['appointment-canceled-notice', 'alert', 'alert-danger']],
+        'text' => [
+          '#markup' => t('<strong>Canceled Appointment</strong><br>This appointment has been canceled.'),
+        ],
+        '#weight' => -70,
+      ];
+    }
+  }
+
+  if (!empty($variables['content']['appointment_cancel_action'])) {
+    return;
+  }
+
+  $action = _appointment_notifications_build_cancel_action_element($variables['node']);
+  if ($action) {
+    $variables['content']['appointment_cancel_action'] = $action;
+  }
+}
+
+/**
+ * Builds cancel action render element for appointment owner/host.
+ */
+function _appointment_notifications_build_cancel_action_element(Node $entity): array {
+  if (!function_exists('_appointment_notifications_cancel_link')) {
+    return [];
+  }
+
+  $account = \Drupal::currentUser();
+  if ($account->isAnonymous()) {
+    return [];
+  }
+
+  $status_value = $entity->hasField('field_appointment_status') ? (string) $entity->get('field_appointment_status')->value : '';
+  $already_cancelled = ($status_value === 'canceled');
+  if (!$already_cancelled && $entity->hasField('field_reservation_cancellation') && !$entity->get('field_reservation_cancellation')->isEmpty()) {
+    $cancel_values = array_column($entity->get('field_reservation_cancellation')->getValue(), 'value');
+    $already_cancelled = in_array('Cancel', $cancel_values, TRUE);
+  }
+  if ($already_cancelled) {
+    return [];
+  }
+
+  $current_uid = (int) $account->id();
+  $owner_uid = (int) $entity->getOwnerId();
+  $host_uid = 0;
+  if ($entity->hasField('field_appointment_host') && !$entity->get('field_appointment_host')->isEmpty()) {
+    $host_uid = (int) $entity->get('field_appointment_host')->target_id;
+  }
+
+  $is_owner = ($current_uid > 0 && $current_uid === $owner_uid);
+  $is_host = ($current_uid > 0 && $current_uid === $host_uid);
+  if (!$is_owner && !$is_host) {
+    return [];
+  }
+
+  $audience = $is_owner ? 'member' : 'host';
+  $cancel_link = _appointment_notifications_cancel_link($entity, $audience);
+  if (empty($cancel_link)) {
+    return [];
+  }
+
+  return [
+    '#type' => 'container',
+    '#attributes' => ['class' => ['appointment-cancel-action']],
+    'link' => [
+      '#type' => 'link',
+      '#title' => t('Cancel this appointment'),
+      '#url' => Url::fromUri($cancel_link),
+      '#attributes' => [
+        'class' => ['btn', 'btn-danger', 'text-white'],
+      ],
+    ],
+    '#weight' => -55,
+  ];
+}
+
+/**
+ * Implements hook_page_attachments().
+ *
+ * Adds a JS-rendered cancel action fallback on appointment canonical pages.
+ */
+function appointment_notifications_page_attachments(array &$attachments): void {
+  $route_match = \Drupal::routeMatch();
+  if ($route_match->getRouteName() !== 'entity.node.canonical') {
+    return;
+  }
+
+  $node = $route_match->getParameter('node');
+  if (!($node instanceof Node) || $node->bundle() !== 'appointment') {
+    return;
+  }
+
+  $attachments['#attached']['library'][] = 'appointment_notifications/appointment_cancel_action';
+  $attachments['#attached']['drupalSettings']['appointmentNotifications']['isCanceled'] = _appointment_notifications_is_canceled($node);
+
+  $action = _appointment_notifications_build_cancel_action_element($node);
+  if (!empty($action['link']['#url']) && $action['link']['#url'] instanceof Url) {
+    $url = $action['link']['#url']->toString();
+    if ($url !== '') {
+      $attachments['#attached']['drupalSettings']['appointmentNotifications']['cancelAction'] = [
+        'url' => $url,
+        'label' => (string) t('Cancel this appointment'),
+      ];
+    }
+  }
+}
+
+/**
+ * Returns TRUE when an appointment is canceled by status or cancellation flag.
+ */
+function _appointment_notifications_is_canceled(Node $entity): bool {
+  $status_value = $entity->hasField('field_appointment_status') ? (string) $entity->get('field_appointment_status')->value : '';
+  if ($status_value === 'canceled') {
+    return TRUE;
+  }
+
+  if ($entity->hasField('field_reservation_cancellation') && !$entity->get('field_reservation_cancellation')->isEmpty()) {
+    $cancel_values = array_column($entity->get('field_reservation_cancellation')->getValue(), 'value');
+    if (in_array('Cancel', $cancel_values, TRUE)) {
+      return TRUE;
+    }
+  }
+
+  return FALSE;
+}
+
+/**
  * Helper function to send emails.
  */
 function _process_template_condition($template, $condition, $include_content) {
@@ -88,6 +268,7 @@ function _process_template_condition($template, $condition, $include_content) {
  */
 function _appointment_notifications_get_schedule_details(Node $node, $start_time_override = NULL) {
   $site_timezone = \Drupal::config('system.date')->get('timezone.default') ?: 'UTC';
+  $site_timezone_object = new \DateTimeZone($site_timezone);
 
   $formatted_date = 'No date provided';
   $appointment_time = 'Time not specified';
@@ -130,8 +311,18 @@ function _appointment_notifications_get_schedule_details(Node $node, $start_time
     }
   }
 
-  // Prefer the explicit timerange field when available.
-  if (!$start_datetime && $node->hasField('field_appointment_timerange') && !$node->get('field_appointment_timerange')->isEmpty()) {
+  $host_start_time_raw = NULL;
+  if ($node->hasField('field_host_start_time') && !$node->get('field_host_start_time')->isEmpty()) {
+    $host_start_time_raw = $node->get('field_host_start_time')->value;
+  }
+  elseif (!empty($start_time_override)) {
+    $host_start_time_raw = $start_time_override;
+  }
+
+  $timerange_start = NULL;
+  $timerange_end = NULL;
+
+  if ($node->hasField('field_appointment_timerange') && !$node->get('field_appointment_timerange')->isEmpty()) {
     $range_item = $node->get('field_appointment_timerange')->first();
     $range_timezone = isset($range_item->timezone) && $range_item->timezone ? $range_item->timezone : $site_timezone;
 
@@ -140,10 +331,10 @@ function _appointment_notifications_get_schedule_details(Node $node, $start_time
 
     try {
       if ($range_start_raw !== NULL && $range_start_raw !== '') {
-        $start_datetime = _appointment_notifications_convert_smartdate_value($range_start_raw, $range_timezone)->setTimezone(new \DateTimeZone($site_timezone));
+        $timerange_start = _appointment_notifications_convert_smartdate_value($range_start_raw, $range_timezone)->setTimezone($site_timezone_object);
       }
       if ($range_end_raw !== NULL && $range_end_raw !== '') {
-        $end_datetime = _appointment_notifications_convert_smartdate_value($range_end_raw, $range_timezone)->setTimezone(new \DateTimeZone($site_timezone));
+        $timerange_end = _appointment_notifications_convert_smartdate_value($range_end_raw, $range_timezone)->setTimezone($site_timezone_object);
       }
     }
     catch (\Exception $e) {
@@ -151,22 +342,48 @@ function _appointment_notifications_get_schedule_details(Node $node, $start_time
         '@nid' => $node->id(),
         '@message' => $e->getMessage(),
       ]);
-      $start_datetime = NULL;
-      $end_datetime = NULL;
+      $timerange_start = NULL;
+      $timerange_end = NULL;
     }
   }
 
-  $host_start_time_raw = NULL;
-  if (!$start_datetime) {
-    if ($node->hasField('field_host_start_time') && !$node->get('field_host_start_time')->isEmpty()) {
-      $host_start_time_raw = $node->get('field_host_start_time')->value;
+  // Prefer slot-based timing when slots are explicitly selected.
+  if (!empty($selected_offsets)) {
+    $base_start = NULL;
+    if (!empty($host_start_time_raw)) {
+      $host_time_string = $host_start_time_raw;
+      $has_date_component = preg_match('/\d{4}-\d{2}-\d{2}/', $host_start_time_raw);
+      if (!$has_date_component && !empty($date_only_string)) {
+        $host_time_string = $date_only_string . ' ' . $host_start_time_raw;
+      }
+
+      try {
+        $base_start = (new \DateTimeImmutable($host_time_string, $site_timezone_object))
+          ->setTimezone($site_timezone_object);
+      }
+      catch (\Exception $e) {
+        \Drupal::logger('appointment_notifications')->error('Error parsing host start time for slot calculation: @message', ['@message' => $e->getMessage()]);
+      }
     }
-    elseif (!empty($start_time_override)) {
-      $host_start_time_raw = $start_time_override;
+
+    if (!$base_start instanceof \DateTimeInterface && $timerange_start instanceof \DateTimeInterface) {
+      $base_start = $timerange_start;
+    }
+
+    if ($base_start instanceof \DateTimeInterface) {
+      $min_offset = min($selected_offsets);
+      $duration_minutes = max($selected_offsets) - $min_offset + 30;
+      $start_datetime = $base_start->modify('+' . $min_offset . ' minutes');
+      $end_datetime = $start_datetime->modify('+' . $duration_minutes . ' minutes');
     }
   }
 
-  if (!empty($host_start_time_raw)) {
+  if (!$start_datetime instanceof \DateTimeInterface && $timerange_start instanceof \DateTimeInterface) {
+    $start_datetime = $timerange_start;
+    $end_datetime = $timerange_end instanceof \DateTimeInterface ? $timerange_end : $timerange_start->modify('+60 minutes');
+  }
+
+  if (!$start_datetime instanceof \DateTimeInterface && !empty($host_start_time_raw)) {
     $host_time_string = $host_start_time_raw;
     $has_date_component = preg_match('/\d{4}-\d{2}-\d{2}/', $host_start_time_raw);
     if (!$has_date_component && !empty($date_only_string)) {
@@ -174,7 +391,8 @@ function _appointment_notifications_get_schedule_details(Node $node, $start_time
     }
 
     try {
-      $base_start = new \DateTimeImmutable($host_time_string, new \DateTimeZone($site_timezone));
+      $base_start = (new \DateTimeImmutable($host_time_string, $site_timezone_object))
+        ->setTimezone($site_timezone_object);
 
       if (!empty($selected_offsets)) {
         $min_offset = min($selected_offsets);
@@ -227,6 +445,121 @@ function _appointment_notifications_feedback_link(?Node $node = NULL): string {
     }
     return '/appointments/feedback';
   }
+}
+
+/**
+ * Returns recipient details for a cancel audience.
+ *
+ * @param \Drupal\node\Entity\Node $node
+ *   The appointment node.
+ * @param string $audience
+ *   The audience key: "member" or "host".
+ *
+ * @return array
+ *   Recipient details with keys: email, name.
+ */
+function _appointment_notifications_cancel_recipient(Node $node, string $audience): array {
+  if ($audience === 'member') {
+    $member = $node->getOwner();
+    $email = $member && $member->getEmail() ? $member->getEmail() : '';
+    return [
+      'email' => $email,
+      'name' => $member ? $member->getDisplayName() : '',
+    ];
+  }
+
+  if ($audience === 'host') {
+    $host = $node->hasField('field_appointment_host') && !$node->get('field_appointment_host')->isEmpty()
+      ? $node->get('field_appointment_host')->entity
+      : NULL;
+    $email = $host && $host->getEmail() ? $host->getEmail() : '';
+    return [
+      'email' => $email,
+      'name' => $host ? $host->getDisplayName() : '',
+    ];
+  }
+
+  return ['email' => '', 'name' => ''];
+}
+
+/**
+ * Builds a signed cancel token for an appointment recipient.
+ */
+function _appointment_notifications_cancel_token(Node $node, string $audience, int $expires, string $recipient_email): string {
+  $normalized_email = mb_strtolower(trim($recipient_email));
+  $payload = implode(':', [
+    (string) $node->id(),
+    $audience,
+    (string) $expires,
+    $normalized_email,
+  ]);
+  $key = \Drupal::service('private_key')->get() . Settings::getHashSalt();
+  return Crypt::hmacBase64($payload, $key);
+}
+
+/**
+ * Validates a signed cancel token.
+ */
+function _appointment_notifications_cancel_token_is_valid(Node $node, string $audience, int $expires, string $token, string $recipient_email): bool {
+  if ($expires < \Drupal::time()->getRequestTime()) {
+    return FALSE;
+  }
+  $expected = _appointment_notifications_cancel_token($node, $audience, $expires, $recipient_email);
+  return hash_equals($expected, $token);
+}
+
+/**
+ * Builds an absolute cancel link for member or host.
+ */
+function _appointment_notifications_cancel_link(Node $node, string $audience): string {
+  if (!in_array($audience, ['member', 'host'], TRUE)) {
+    return '';
+  }
+
+  $recipient = _appointment_notifications_cancel_recipient($node, $audience);
+  if (empty($recipient['email'])) {
+    return '';
+  }
+
+  $expires = \Drupal::time()->getRequestTime() + (14 * 24 * 60 * 60);
+  $token = _appointment_notifications_cancel_token($node, $audience, $expires, $recipient['email']);
+
+  $path = '/appointment/' . $node->id() . '/cancel/' . $audience . '/' . $expires . '/' . rawurlencode($token);
+  return Url::fromUserInput($path, ['absolute' => TRUE])->toString();
+}
+
+/**
+ * Applies cancellation changes to one appointment.
+ */
+function _appointment_notifications_cancel_appointment(Node $appointment): bool {
+  $appointment->original = clone $appointment;
+
+  $marked_cancelled = FALSE;
+  if ($appointment->hasField('field_reservation_cancellation')) {
+    $existing = array_column($appointment->get('field_reservation_cancellation')->getValue(), 'value');
+    if (!in_array('Cancel', $existing, TRUE)) {
+      $appointment->set('field_reservation_cancellation', [['value' => 'Cancel']]);
+      $marked_cancelled = TRUE;
+    }
+  }
+
+  if ($appointment->hasField('field_appointment_status')) {
+    $status_value = (string) $appointment->get('field_appointment_status')->value;
+    if ($status_value === 'canceled' && !$marked_cancelled) {
+      return FALSE;
+    }
+    if ($status_value !== 'canceled') {
+      $appointment->set('field_appointment_status', 'canceled');
+      $marked_cancelled = TRUE;
+    }
+  }
+
+  if (!$marked_cancelled) {
+    return FALSE;
+  }
+
+  $appointment->save();
+  return TRUE;
 }
 
 /**
@@ -609,8 +942,20 @@ function _appointment_notifications_send_email(Node $node, $action) {
 
   foreach ($recipient_definitions as $recipient) {
     $recipient_name = !empty($recipient['name']) ? $recipient['name'] : 'Not specified';
+    $recipient_email = !empty($recipient['email']) ? mb_strtolower(trim($recipient['email'])) : '';
+    $member_email_key = mb_strtolower(trim($member_email));
+    $host_email_key = mb_strtolower(trim($host_email));
+    $cancel_audience = '';
+    if (!empty($recipient_email) && $recipient_email === $member_email_key) {
+      $cancel_audience = 'member';
+    }
+    elseif (!empty($recipient_email) && $recipient_email === $host_email_key) {
+      $cancel_audience = 'host';
+    }
+
     $replacements = $base_replacements + [
       '@recipient_name' => $recipient_name,
+      '@cancel_link' => $cancel_audience ? _appointment_notifications_cancel_link($node, $cancel_audience) : '',
     ];
 
     $subject = strtr($subject_template, $replacements);
