@@ -64,7 +64,7 @@ email_subject_canceled: 'Appointment Canceled: @title'
 email_body_canceled: |
   Dear @recipient_name,
 
-  The appointment titled "@title" scheduled for @date has been canceled.
+  The appointment titled "@title" scheduled for @date at @time has been canceled.
 
   You can reschedule at your convenience.
 

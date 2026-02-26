@@ -521,7 +521,14 @@ function _appointment_notifications_cancel_link(Node $node, string $audience): s
     return '';
   }
 
-  $expires = \Drupal::time()->getRequestTime() + (14 * 24 * 60 * 60);
+  // Expire at appointment start + 24h so the link stays valid through the day
+  // of the appointment. Falls back to 14 days if no timerange is stored.
+  $appointment_ts = ($node->hasField('field_appointment_timerange') && !$node->get('field_appointment_timerange')->isEmpty())
+    ? (int) $node->get('field_appointment_timerange')->value
+    : 0;
+  $expires = $appointment_ts > 0
+    ? $appointment_ts + (24 * 60 * 60)
+    : \Drupal::time()->getRequestTime() + (14 * 24 * 60 * 60);
   $token = _appointment_notifications_cancel_token($node, $audience, $expires, $recipient['email']);
 
   $path = '/appointment/' . $node->id() . '/cancel/' . $audience . '/' . $expires . '/' . rawurlencode($token);
@@ -617,6 +624,25 @@ function _appointment_notifications_mark_sent(Node $node, $type, $date_value) {
   $sent = $state->get($key, []);
   $sent[$node->id()] = $date_value;
   $state->set($key, $sent);
+}
+
+/**
+ * Prunes sent-notification state entries older than $days days.
+ *
+ * Prevents the state arrays from growing unbounded over time.
+ */
+function _appointment_notifications_prune_sent_state(string $type, int $days = 90): void {
+  $state = \Drupal::state();
+  $key = 'appointment_notifications.sent.' . $type;
+  $sent = $state->get($key, []);
+  if (empty($sent)) {
+    return;
+  }
+  $cutoff = (new \DateTime('now'))->modify('-' . $days . ' days')->format('Y-m-d');
+  $pruned = array_filter($sent, static fn(string $date) => $date >= $cutoff);
+  if (count($pruned) !== count($sent)) {
+    $state->set($key, $pruned);
+  }
 }
 
 /**
@@ -1016,12 +1042,26 @@ function appointment_notifications_cron() {
   $now = new \DateTime('now', new \DateTimeZone($site_timezone));
   $feedback_date = (clone $now)->modify('-1 day')->format('Y-m-d');
 
-  $nids = \Drupal::entityQuery('node')
+  // Query by date field (legacy path).
+  $feedback_nids_by_date = \Drupal::entityQuery('node')
     ->condition('type', 'appointment')
     ->condition('field_appointment_status', 'canceled', '<>')
     ->condition('field_appointment_date', $feedback_date)
     ->accessCheck(FALSE)
     ->execute();
+
+  // Also catch appointments stored via timerange (start falls on feedback day).
+  $feedback_day_start = (clone $now)->modify('-1 day')->setTime(0, 0, 0)->getTimestamp();
+  $feedback_day_end   = (clone $now)->modify('-1 day')->setTime(23, 59, 59)->getTimestamp();
+  $feedback_nids_by_range = \Drupal::entityQuery('node')
+    ->condition('type', 'appointment')
+    ->condition('field_appointment_status', 'canceled', '<>')
+    ->condition('field_appointment_timerange.value', $feedback_day_start, '>=')
+    ->condition('field_appointment_timerange.value', $feedback_day_end, '<=')
+    ->accessCheck(FALSE)
+    ->execute();
+
+  $nids = array_unique(array_merge(array_values($feedback_nids_by_date), array_values($feedback_nids_by_range)));
 
   if (!empty($nids)) {
     $nodes = Node::loadMultiple($nids);
@@ -1040,12 +1080,26 @@ function appointment_notifications_cron() {
     $days_before = max(1, $days_before);
     $reminder_date = (clone $now)->modify('+' . $days_before . ' day')->format('Y-m-d');
 
-    $reminder_nids = \Drupal::entityQuery('node')
+    // Query by date field (legacy path).
+    $reminder_nids_by_date = \Drupal::entityQuery('node')
       ->condition('type', 'appointment')
       ->condition('field_appointment_status', 'scheduled')
       ->condition('field_appointment_date', $reminder_date)
       ->accessCheck(FALSE)
       ->execute();
+
+    // Also catch appointments stored via timerange (start falls on reminder day).
+    $reminder_day_start = (clone $now)->modify('+' . $days_before . ' day')->setTime(0, 0, 0)->getTimestamp();
+    $reminder_day_end   = (clone $now)->modify('+' . $days_before . ' day')->setTime(23, 59, 59)->getTimestamp();
+    $reminder_nids_by_range = \Drupal::entityQuery('node')
+      ->condition('type', 'appointment')
+      ->condition('field_appointment_status', 'scheduled')
+      ->condition('field_appointment_timerange.value', $reminder_day_start, '>=')
+      ->condition('field_appointment_timerange.value', $reminder_day_end, '<=')
+      ->accessCheck(FALSE)
+      ->execute();
+
+    $reminder_nids = array_unique(array_merge(array_values($reminder_nids_by_date), array_values($reminder_nids_by_range)));
 
     if (!empty($reminder_nids)) {
       $reminder_nodes = Node::loadMultiple($reminder_nids);
@@ -1071,6 +1125,11 @@ function appointment_notifications_cron() {
       }
     }
   }
+
+  // Prune sent-state arrays once per cron run to keep them bounded.
+  _appointment_notifications_prune_sent_state('feedback');
+  _appointment_notifications_prune_sent_state('member_reminder');
+  _appointment_notifications_prune_sent_state('host_reminder');
 }
 
 /**
@@ -1152,18 +1211,21 @@ function _appointment_notifications_send_problem_notice(Node $node) {
   $key = 'appointment_problem_notice';
   $language = \Drupal::currentUser()->getPreferredLangcode();
   $sender = $config->get('email_sender');
-  $to_emails = explode(',', $config->get('staff_email'));
+  $to_emails = array_filter(array_map('trim', preg_split('/[\r\n,]+/', $config->get('staff_email') ?? '')));
   $development_mode = $config->get('development_mode');
   $email_logging = $config->get('email_logging');
+
+  $schedule_details = _appointment_notifications_get_schedule_details($node);
 
   // Prepare replacement patterns.
   $replacements = [
     '@title' => $node->getTitle(),
-    '@date' => $node->get('field_appointment_date')->value,
-    '@result' => $node->get('field_appointment_result')->value,
-    '@feedback' => $node->get('field_appointment_feedback')->value,
-    '@author_name' => $node->getOwner()->getDisplayName(), // Name of the person who had the problem
-    '@volunteer_name' => '', // Placeholder for volunteer name
+    '@date' => $schedule_details['date'],
+    '@time' => $schedule_details['time'],
+    '@result' => $node->hasField('field_appointment_result') ? ($node->get('field_appointment_result')->value ?? '') : '',
+    '@feedback' => $node->hasField('field_appointment_feedback') ? ($node->get('field_appointment_feedback')->value ?? '') : '',
+    '@author_name' => $node->getOwner()->getDisplayName(),
+    '@volunteer_name' => '',
     '@link' => Url::fromRoute('entity.node.canonical', ['node' => $node->id()], ['absolute' => TRUE])->toString(),
   ];
 
