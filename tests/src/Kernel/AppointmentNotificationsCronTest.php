@@ -27,6 +27,7 @@ class AppointmentNotificationsCronTest extends KernelTestBase {
     'node',
     'options',
     'datetime',
+    'smart_date',
     'profile',
     'appointment_notifications',
   ];
@@ -126,6 +127,9 @@ class AppointmentNotificationsCronTest extends KernelTestBase {
       ],
     ]);
     $this->attachField('field_appointment_status', 'Appointment status');
+
+    $this->ensureField('field_appointment_timerange', 'smartdate', []);
+    $this->attachField('field_appointment_timerange', 'Appointment time range');
 
     $this->ensureField('field_appointment_date', 'datetime', ['datetime_type' => 'date']);
     $this->attachField('field_appointment_date', 'Appointment date');
