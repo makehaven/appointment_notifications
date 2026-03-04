@@ -435,7 +435,7 @@ function _appointment_notifications_get_schedule_details(Node $node, $start_time
 function _appointment_notifications_feedback_link(?Node $node = NULL): string {
   try {
     if ($node) {
-      return Url::fromRoute('appointment_notifications.feedback_form', ['node' => $node->id()], ['absolute' => TRUE])->toString();
+      return Url::fromRoute('appointment_facilitator.feedback_form', ['node' => $node->id()], ['absolute' => TRUE])->toString();
     }
     return Url::fromUserInput('/appointments/feedback', ['absolute' => TRUE])->toString();
   }
@@ -1224,6 +1224,14 @@ function _appointment_notifications_send_feedback_invitation(Node $node) {
   // Replace tokens.
   $subject = strtr($subject_template, $replacements);
   $body = strtr($body_template, $replacements);
+
+  // Backward compatibility: if config still contains the legacy generic
+  // feedback URL, rewrite it to the per-appointment feedback URL.
+  $legacy_feedback_urls = [
+    'https://www.makehaven.org/appointments/feedback',
+    '/appointments/feedback',
+  ];
+  $body = str_replace($legacy_feedback_urls, $replacements['@feedback_link'], $body);
 
   // Ensure subject and body are not empty.
   $subject = trim($subject) ?: 'Feedback for your appointment';

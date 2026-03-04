@@ -6,14 +6,6 @@ appointment_notifications.settings_form:
   requirements:
     _permission: 'administer site configuration'
 
-appointment_notifications.feedback_form:
-  path: '/appointment/{node}/feedback'
-  defaults:
-    _form: '\Drupal\appointment_notifications\Form\AppointmentFeedbackForm'
-    _title: 'Appointment Feedback'
-  requirements:
-    _permission: 'access content'
-
 appointment_notifications.cancel_by_link:
   path: '/appointment/{node}/cancel/{audience}/{expires}/{token}'
   defaults:
