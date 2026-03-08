@@ -17,6 +17,9 @@ function appointment_notifications_entity_insert(Drupal\Core\Entity\EntityInterf
 
     // Send email to the host volunteer.
     _appointment_notifications_send_email($entity, 'host_scheduled');
+
+    // Send Slack notifications.
+    _appointment_notifications_notify_slack($entity, 'scheduled');
   }
 }
 
@@ -39,6 +42,9 @@ function appointment_notifications_entity_update(Drupal\Core\Entity\EntityInterf
       if ($original_status === 'scheduled' && $current_status === 'canceled') {
         // Send the cancellation email to both host and member.
         _appointment_notifications_send_email($entity, 'canceled');
+
+        // Send Slack notifications.
+        _appointment_notifications_notify_slack($entity, 'canceled');
       }
   
       // Get the original (old) value of the appointment result field.
@@ -1362,5 +1368,55 @@ function appointment_notifications_mail($key, &$message, $params) {
     default:
       \Drupal::logger('appointment_notifications')->warning('Unhandled mail key: @key', ['@key' => $key]);
       break;
+  }
+}
+
+/**
+ * Sends a Slack notification for appointment events.
+ */
+function _appointment_notifications_notify_slack(\Drupal\node\NodeInterface $node, string $action): void {
+  if (!\Drupal::hasService('appointment_facilitator.slack')) {
+    return;
+  }
+
+  /** @var \Drupal\appointment_facilitator\Service\AppointmentSlackService $slack */
+  $slack = \Drupal::service('appointment_facilitator.slack');
+
+  $member = $node->getOwner();
+  $host = $node->hasField('field_appointment_host') && !$node->get('field_appointment_host')->isEmpty()
+    ? $node->get('field_appointment_host')->entity
+    : NULL;
+
+  if (!$member || !$host) {
+    return;
+  }
+
+  $details = _appointment_notifications_get_schedule_details($node);
+  $time_str = "{$details['date']} at {$details['time']}";
+
+  if ($action === 'scheduled') {
+    // Notify host.
+    $host_msg = t('New appointment scheduled with @member for @time.', [
+      '@member' => $member->getDisplayName(),
+      '@time' => $time_str,
+    ]);
+    $slack->sendMessageToUser($host, (string) $host_msg);
+
+    // Notify member.
+    $member_msg = t('Your appointment with @host for @time has been scheduled.', [
+      '@host' => $host->getDisplayName(),
+      '@time' => $time_str,
+    ]);
+    $slack->sendMessageToUser($member, (string) $member_msg);
+  }
+  elseif ($action === 'canceled') {
+    // Notify both.
+    $msg = t('The appointment between @host and @member on @time has been CANCELED.', [
+      '@host' => $host->getDisplayName(),
+      '@member' => $member->getDisplayName(),
+      '@time' => $time_str,
+    ]);
+    $slack->sendMessageToUser($host, (string) $msg);
+    $slack->sendMessageToUser($member, (string) $msg);
   }
 }
