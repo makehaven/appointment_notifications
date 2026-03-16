@@ -3,7 +3,7 @@ Dear @recipient_name,
 Your appointment with @volunteer_name has been successfully scheduled. Here are the details:
 
 **Appointment:** @title
-**Date:** @date
+**Date:** @date at @time
 **Purpose:** @purpose
 
 start-if@checkout_instructions
@@ -26,4 +26,3 @@ Thank you for your participation. We look forward to seeing you soon!
 
 Best regards,
 The MakeHaven Team
-

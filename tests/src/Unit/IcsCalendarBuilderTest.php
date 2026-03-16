@@ -106,6 +106,79 @@ class IcsCalendarBuilderTest extends UnitTestCase {
   }
 
   /**
+   * Tests timerange timestamps are rendered in the configured site timezone.
+   */
+  public function testScheduleDetailsUseTimerangeTimestampInSiteTimezone(): void {
+    $this->setupDrupalConfigMock('no-reply@makehaven.org', 'MakeHaven', 'America/New_York');
+
+    $start_timestamp = gmmktime(19, 0, 0, 1, 15, 2026);
+    $end_timestamp = gmmktime(20, 0, 0, 1, 15, 2026);
+
+    $node = $this->createScheduleNode([
+      'field_appointment_date' => '2026-01-15',
+      'field_appointment_timerange' => [
+        'value' => $start_timestamp,
+        'end_value' => $end_timestamp,
+        'timezone' => 'America/New_York',
+      ],
+    ]);
+
+    $details = _appointment_notifications_get_schedule_details($node);
+
+    $this->assertInstanceOf(\DateTimeInterface::class, $details['start_datetime']);
+    $this->assertSame('Thursday, January 15, 2026', $details['date']);
+    $this->assertSame('2:00 PM', $details['time']);
+    $this->assertSame('14:00', $details['start_datetime']->format('H:i'));
+    $this->assertSame('15:00', $details['end_datetime']->format('H:i'));
+  }
+
+  /**
+   * Tests slot offsets produce the correct later slot start time.
+   */
+  public function testScheduleDetailsApplyLaterSelectedSlotOffset(): void {
+    $this->setupDrupalConfigMock('no-reply@makehaven.org', 'MakeHaven', 'America/New_York');
+
+    $node = $this->createScheduleNode([
+      'field_appointment_date' => '2026-03-02',
+      'field_host_start_time' => '09:00:00',
+      'field_appointment_slot' => ['2'],
+    ]);
+
+    $details = _appointment_notifications_get_schedule_details($node);
+
+    $this->assertInstanceOf(\DateTimeInterface::class, $details['start_datetime']);
+    $this->assertSame('10:00', $details['start_datetime']->format('H:i'));
+    $this->assertSame('10:30', $details['end_datetime']->format('H:i'));
+    $this->assertSame('10:00 AM', $details['time']);
+  }
+
+  /**
+   * Tests DST-aware timerange timestamps keep the correct summer local time.
+   */
+  public function testScheduleDetailsHandleDaylightSavingTimestamp(): void {
+    $this->setupDrupalConfigMock('no-reply@makehaven.org', 'MakeHaven', 'America/New_York');
+
+    $start_timestamp = gmmktime(18, 30, 0, 7, 15, 2026);
+    $end_timestamp = gmmktime(19, 30, 0, 7, 15, 2026);
+
+    $node = $this->createScheduleNode([
+      'field_appointment_date' => '2026-07-15',
+      'field_appointment_timerange' => [
+        'value' => $start_timestamp,
+        'end_value' => $end_timestamp,
+        'timezone' => 'America/New_York',
+      ],
+    ]);
+
+    $details = _appointment_notifications_get_schedule_details($node);
+
+    $this->assertInstanceOf(\DateTimeInterface::class, $details['start_datetime']);
+    $this->assertSame('Wednesday, July 15, 2026', $details['date']);
+    $this->assertSame('2:30 PM', $details['time']);
+    $this->assertSame('America/New_York', $details['start_datetime']->getTimezone()->getName());
+  }
+
+  /**
    * Tests ICS builder produces correct UTC times from Eastern timestamps.
    *
    * This is the critical test: verifies that an appointment at 2:30 PM EST
@@ -205,6 +278,38 @@ class IcsCalendarBuilderTest extends UnitTestCase {
       'DTSTART should be 18:30 UTC (14:30 EDT + 4 hours)');
     $this->assertStringContainsString('DTEND:20260715T193000Z', $content,
       'DTEND should be 19:30 UTC (15:30 EDT + 4 hours)');
+  }
+
+  /**
+   * Tests ICS builder around the fall DST transition using EST offset.
+   */
+  public function testIcsBuilderProducesCorrectUtcTimesAfterDstFallback(): void {
+    $node = $this->createMockNode(100, 'Test Appointment Post DST');
+
+    $et = new \DateTimeZone('America/New_York');
+    $start = new \DateTimeImmutable('2026-11-15 14:30:00', $et);
+    $end = new \DateTimeImmutable('2026-11-15 15:30:00', $et);
+
+    $schedule_details = [
+      'start_datetime' => $start,
+      'end_datetime' => $end,
+    ];
+
+    $this->setupDrupalConfigMock('no-reply@makehaven.org', 'MakeHaven');
+
+    $attachment = _appointment_notifications_build_calendar_attachment(
+      $node,
+      $schedule_details,
+      'member_scheduled',
+      [],
+      []
+    );
+
+    $this->assertNotNull($attachment);
+    $content = $attachment['filecontent'];
+
+    $this->assertStringContainsString('DTSTART:20261115T193000Z', $content);
+    $this->assertStringContainsString('DTEND:20261115T203000Z', $content);
   }
 
   /**
