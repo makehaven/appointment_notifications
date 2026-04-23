@@ -888,7 +888,7 @@ function _appointment_notifications_send_email(Node $node, $action) {
   $member_name = $member_user ? $member_user->getDisplayName() : 'Not specified';
   $member_slack_id = _get_profile_field_value($member_user, 'main', 'field_member_slack_id_number');
   $member_slack_link = $member_slack_id && $member_slack_id !== 'Not available'
-      ? 'https://makehaven.slack.com/team/' . $member_slack_id
+      ? 'https://slack.com/app_redirect?channel=' . $member_slack_id
       : 'Not available';
 
   // Prepare the host's email, name, and Slack ID.
@@ -901,7 +901,7 @@ function _appointment_notifications_send_email(Node $node, $action) {
   $host_name = $host_user ? $host_user->getDisplayName() : 'Not specified';
   $host_slack_id = $host_user ? _get_profile_field_value($host_user, 'main', 'field_member_slack_id_number') : 'Not available';
   $host_slack_link = $host_slack_id !== 'Not available'
-      ? 'https://makehaven.slack.com/team/' . $host_slack_id
+      ? 'https://slack.com/app_redirect?channel=' . $host_slack_id
       : 'Not available';
 
   // [New Code] Determine the appointment purpose.
