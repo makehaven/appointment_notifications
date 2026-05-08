@@ -353,27 +353,25 @@ function _appointment_notifications_get_schedule_details(Node $node, $start_time
     }
   }
 
-  // Prefer slot-based timing when slots are explicitly selected.
-  if (!empty($selected_offsets)) {
+  // Slot-based timing: only run the offset math when we have a separate host
+  // shift base (host_start_time field or ?start_time= URL override). The
+  // appointment_facilitator presave hook already resolves slots into the
+  // stored timerange, so falling back to timerange here would re-apply the
+  // offset and shift the displayed time forward by min(slot_offsets).
+  if (!empty($selected_offsets) && !empty($host_start_time_raw)) {
     $base_start = NULL;
-    if (!empty($host_start_time_raw)) {
-      $host_time_string = $host_start_time_raw;
-      $has_date_component = preg_match('/\d{4}-\d{2}-\d{2}/', $host_start_time_raw);
-      if (!$has_date_component && !empty($date_only_string)) {
-        $host_time_string = $date_only_string . ' ' . $host_start_time_raw;
-      }
-
-      try {
-        $base_start = (new \DateTimeImmutable($host_time_string, $site_timezone_object))
-          ->setTimezone($site_timezone_object);
-      }
-      catch (\Exception $e) {
-        \Drupal::logger('appointment_notifications')->error('Error parsing host start time for slot calculation: @message', ['@message' => $e->getMessage()]);
-      }
+    $host_time_string = $host_start_time_raw;
+    $has_date_component = preg_match('/\d{4}-\d{2}-\d{2}/', $host_start_time_raw);
+    if (!$has_date_component && !empty($date_only_string)) {
+      $host_time_string = $date_only_string . ' ' . $host_start_time_raw;
     }
 
-    if (!$base_start instanceof \DateTimeInterface && $timerange_start instanceof \DateTimeInterface) {
-      $base_start = $timerange_start;
+    try {
+      $base_start = (new \DateTimeImmutable($host_time_string, $site_timezone_object))
+        ->setTimezone($site_timezone_object);
+    }
+    catch (\Exception $e) {
+      \Drupal::logger('appointment_notifications')->error('Error parsing host start time for slot calculation: @message', ['@message' => $e->getMessage()]);
     }
 
     if ($base_start instanceof \DateTimeInterface) {
