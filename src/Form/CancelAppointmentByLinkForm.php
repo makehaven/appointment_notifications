@@ -18,6 +18,11 @@ final class CancelAppointmentByLinkForm extends ConfirmFormBase {
   protected ?NodeInterface $appointment = NULL;
 
   /**
+   * The cancel link audience ("member" or "host").
+   */
+  protected string $cancelAudience = '';
+
+  /**
    * {@inheritdoc}
    */
   public function getFormId(): string {
@@ -87,6 +92,7 @@ final class CancelAppointmentByLinkForm extends ConfirmFormBase {
     string $token = ''
   ): array {
     $this->appointment = $node;
+    $this->cancelAudience = $audience;
     $form = parent::buildForm($form, $form_state);
 
     if ($this->appointment instanceof NodeInterface) {
@@ -110,6 +116,21 @@ final class CancelAppointmentByLinkForm extends ConfirmFormBase {
       $this->messenger()->addError($this->t('Unable to cancel the appointment.'));
       $form_state->setRedirectUrl(Url::fromUserInput('/appointments'));
       return;
+    }
+
+    // When the original booker cancels but other members joined the session,
+    // keep it alive by promoting the longest-waiting attendee to primary
+    // contact instead of cancelling the whole appointment. A host cancellation
+    // still cancels the session, since the facilitator can no longer run it.
+    if ($this->cancelAudience === 'member') {
+      $promoted = _appointment_notifications_promote_attendee_to_owner($this->appointment);
+      if ($promoted) {
+        $this->messenger()->addStatus($this->t('You have been removed from this session. Because @name had also joined, the session is still on and @name is now the primary contact. They and the facilitator have been notified.', [
+          '@name' => $promoted->getDisplayName(),
+        ]));
+        $form_state->setRedirectUrl($this->appointment->toUrl());
+        return;
+      }
     }
 
     if (_appointment_notifications_cancel_appointment($this->appointment)) {

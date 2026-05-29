@@ -634,6 +634,163 @@ function _appointment_notifications_cancel_appointment(Node $appointment): bool 
 }
 
 /**
+ * Promotes the longest-waiting attendee to be the appointment's primary booker.
+ *
+ * Used when the original booker cancels but other members have joined the
+ * session. Rather than cancelling the whole appointment - which strands the
+ * joiners and the still-available facilitator - ownership transfers to the next
+ * attendee and the session stays active. The promoted attendee is removed from
+ * the attendees list, the transfer is logged on the appointment note, and the
+ * promoted member plus the host are notified.
+ *
+ * @param \Drupal\node\Entity\Node $appointment
+ *   The appointment node.
+ *
+ * @return \Drupal\user\UserInterface|null
+ *   The newly-promoted owner, or NULL when there is no eligible attendee to
+ *   promote (the caller should then fall back to a normal cancellation).
+ */
+function _appointment_notifications_promote_attendee_to_owner(Node $appointment): ?\Drupal\user\UserInterface {
+  if (!$appointment->hasField('field_appointment_attendees') || $appointment->get('field_appointment_attendees')->isEmpty()) {
+    return NULL;
+  }
+
+  $former_owner = $appointment->getOwner();
+  $former_owner_id = (int) $appointment->getOwnerId();
+  $former_owner_name = $former_owner && method_exists($former_owner, 'getDisplayName')
+    ? $former_owner->getDisplayName()
+    : (string) t('the original booker');
+
+  // Attendees are appended in join order, so the first eligible item is the
+  // longest-waiting member.
+  $values = $appointment->get('field_appointment_attendees')->getValue();
+  $promoted_uid = 0;
+  foreach ($values as $delta => $item) {
+    $candidate = (int) ($item['target_id'] ?? 0);
+    if ($candidate > 0 && $candidate !== $former_owner_id) {
+      $promoted_uid = $candidate;
+      unset($values[$delta]);
+      break;
+    }
+  }
+
+  if ($promoted_uid <= 0) {
+    return NULL;
+  }
+
+  $promoted_user = \Drupal::entityTypeManager()->getStorage('user')->load($promoted_uid);
+  if (!$promoted_user) {
+    return NULL;
+  }
+
+  // Clone before mutating so hook_entity_update sees the prior state. Status is
+  // intentionally left unchanged, so the cancellation email does not fire.
+  $appointment->original = clone $appointment;
+  $appointment->setOwnerId($promoted_uid);
+  $appointment->set('field_appointment_attendees', array_values($values));
+
+  if ($appointment->hasField('field_appointment_note')) {
+    $existing_note = (string) $appointment->get('field_appointment_note')->value;
+    $stamp = \Drupal::service('date.formatter')->format(\Drupal::time()->getRequestTime(), 'custom', 'Y-m-d g:ia');
+    $transfer_line = sprintf(
+      "--- Booking transferred (%s) ---\n%s cancelled; %s promoted to primary contact. Session kept active for remaining participants.",
+      $stamp,
+      $former_owner_name,
+      $promoted_user->getDisplayName()
+    );
+    $appointment->set('field_appointment_note', trim($existing_note . "\n\n" . $transfer_line));
+  }
+
+  $appointment->save();
+
+  _appointment_notifications_send_rebooked_email($appointment, $promoted_user, $former_owner_name);
+  _appointment_notifications_notify_slack($appointment, 'rebooked');
+
+  return $promoted_user;
+}
+
+/**
+ * Notifies the newly-promoted member and the host that a booking transferred.
+ *
+ * @param \Drupal\node\Entity\Node $node
+ *   The appointment node (already saved with the new owner).
+ * @param \Drupal\user\UserInterface $promoted_user
+ *   The member promoted to primary contact.
+ * @param string $former_owner_name
+ *   Display name of the member who cancelled.
+ *
+ * @return bool
+ *   TRUE if at least one notification was sent (or suppressed in dev mode).
+ */
+function _appointment_notifications_send_rebooked_email(Node $node, \Drupal\user\UserInterface $promoted_user, string $former_owner_name): bool {
+  $config = \Drupal::config('appointment_notifications.settings');
+  if ($config->get('development_mode')) {
+    return TRUE;
+  }
+
+  $mailManager = \Drupal::service('plugin.manager.mail');
+  $sender = $config->get('email_sender');
+  $language = \Drupal::currentUser()->getPreferredLangcode();
+
+  $details = _appointment_notifications_get_schedule_details($node);
+  $time_part = !empty($details['time']) ? 'at ' . $details['time'] : '';
+  $when = trim(($details['date'] ?? '') . ' ' . $time_part);
+  if ($when === '') {
+    $when = (string) t('the scheduled time');
+  }
+  $link = Url::fromRoute('entity.node.canonical', ['node' => $node->id()], ['absolute' => TRUE])->toString();
+  $title = $node->getTitle();
+
+  $host = $node->hasField('field_appointment_host') && !$node->get('field_appointment_host')->isEmpty()
+    ? $node->get('field_appointment_host')->entity
+    : NULL;
+
+  $sent = FALSE;
+
+  // 1. The newly-promoted member.
+  if ($promoted_user->getEmail()) {
+    $subject = sprintf('You are now the primary contact for "%s"', $title);
+    $body = sprintf(
+      "Good news - your session is still happening.\n\n" .
+      "%s, who originally booked \"%s\" on %s, has cancelled. Because you had joined, the session is still on and you are now the primary contact.\n\n" .
+      "View the appointment: %s\n\n" .
+      "If you can no longer attend, please cancel from the appointment page so the facilitator knows.",
+      $former_owner_name,
+      $title,
+      $when,
+      $link
+    );
+    $result = $mailManager->mail('appointment_notifications', 'appointment_rebooked', $promoted_user->getEmail(), $language, [
+      'subject' => $subject,
+      'message' => $body,
+    ], $sender);
+    $sent = $sent || !empty($result['result']);
+  }
+
+  // 2. The host/facilitator.
+  if ($host && method_exists($host, 'getEmail') && $host->getEmail()) {
+    $subject = sprintf('Booking transfer for "%s" - session still on', $title);
+    $body = sprintf(
+      "Heads up: %s cancelled their booking for \"%s\" on %s.\n\n" .
+      "Because another member had joined, the session is still scheduled and %s is now the primary contact.\n\n" .
+      "View the appointment: %s",
+      $former_owner_name,
+      $title,
+      $when,
+      $promoted_user->getDisplayName(),
+      $link
+    );
+    $result = $mailManager->mail('appointment_notifications', 'appointment_rebooked', $host->getEmail(), $language, [
+      'subject' => $subject,
+      'message' => $body,
+    ], $sender);
+    $sent = $sent || !empty($result['result']);
+  }
+
+  return $sent;
+}
+
+/**
  * Converts Smart Date raw values (timestamp or string) to DateTimeImmutable.
  *
  * @param string|int $value
@@ -1356,6 +1513,7 @@ function appointment_notifications_mail($key, &$message, $params) {
     case 'appointment_feedback_invitation':
     case 'appointment_member_reminder':
     case 'appointment_host_reminder':
+    case 'appointment_rebooked':
       $message['subject'] = $params['subject'];
       $message['body'][] = $params['message'];
       if (!empty($params['attachments'])) {
@@ -1413,6 +1571,16 @@ function _appointment_notifications_notify_slack(\Drupal\node\NodeInterface $nod
       '@host' => $host->getDisplayName(),
       '@member' => $member->getDisplayName(),
       '@time' => $time_str,
+    ]);
+    $slack->sendMessageToUser($host, (string) $msg);
+    $slack->sendMessageToUser($member, (string) $msg);
+  }
+  elseif ($action === 'rebooked') {
+    // The owner has already been swapped to the promoted attendee by the time
+    // this fires, so $member is the new primary contact.
+    $msg = t('Booking transfer: the original booker for the session on @time cancelled, but @member had joined, so the session is still on with @member as the primary contact.', [
+      '@time' => $time_str,
+      '@member' => $member->getDisplayName(),
     ]);
     $slack->sendMessageToUser($host, (string) $msg);
     $slack->sendMessageToUser($member, (string) $msg);
