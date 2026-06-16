@@ -366,13 +366,7 @@ function _appointment_notifications_get_schedule_details(Node $node, $start_time
       $host_time_string = $date_only_string . ' ' . $host_start_time_raw;
     }
 
-    try {
-      $base_start = (new \DateTimeImmutable($host_time_string, $site_timezone_object))
-        ->setTimezone($site_timezone_object);
-    }
-    catch (\Exception $e) {
-      \Drupal::logger('appointment_notifications')->error('Error parsing host start time for slot calculation: @message', ['@message' => $e->getMessage()]);
-    }
+    $base_start = _appointment_notifications_parse_host_start_time($host_time_string, $site_timezone, $node->id());
 
     if ($base_start instanceof \DateTimeInterface) {
       $min_offset = min($selected_offsets);
@@ -394,10 +388,9 @@ function _appointment_notifications_get_schedule_details(Node $node, $start_time
       $host_time_string = $date_only_string . ' ' . $host_start_time_raw;
     }
 
-    try {
-      $base_start = (new \DateTimeImmutable($host_time_string, $site_timezone_object))
-        ->setTimezone($site_timezone_object);
+    $base_start = _appointment_notifications_parse_host_start_time($host_time_string, $site_timezone, $node->id());
 
+    if ($base_start instanceof \DateTimeInterface) {
       if (!empty($selected_offsets)) {
         $min_offset = min($selected_offsets);
         $duration_minutes = max($selected_offsets) - $min_offset + 30;
@@ -410,9 +403,6 @@ function _appointment_notifications_get_schedule_details(Node $node, $start_time
       $start_datetime = $base_start->modify('+' . $min_offset . ' minutes');
       $end_datetime = $start_datetime->modify('+' . $duration_minutes . ' minutes');
       $appointment_time = $start_datetime->format('g:i A');
-    }
-    catch (\Exception $e) {
-      \Drupal::logger('appointment_notifications')->error('Error calculating appointment time: @message', ['@message' => $e->getMessage()]);
     }
   }
 
@@ -808,6 +798,51 @@ function _appointment_notifications_convert_smartdate_value($value, string $time
     return $date->setTimezone(new \DateTimeZone($timezone));
   }
   return new \DateTimeImmutable($value, new \DateTimeZone($timezone));
+}
+
+/**
+ * Robustly parses a host start-time string into the site timezone.
+ *
+ * field_host_start_time can hold either a formatted datetime/time string or a
+ * bare numeric unix timestamp (for slot-resolved appointments). A bare numeric
+ * string makes new \DateTimeImmutable($value) throw, which previously logged at
+ * error severity ~hourly ("Error parsing host start time for slot calculation")
+ * and forced a fall back to the stored timerange — re-applying the slot offset
+ * and shifting the emailed time forward by min(slot_offsets). Route through the
+ * smart-date converter (which already handles both forms), then a permissive
+ * strtotime() last resort, and fail soft with an actionable warning that names
+ * the offending value and node instead of an unexplained error.
+ *
+ * @param mixed $value
+ *   The raw host start-time value (numeric timestamp or datetime string).
+ * @param string $timezone
+ *   The site timezone identifier.
+ * @param int|string|null $nid
+ *   The appointment node id, for diagnostic logging.
+ *
+ * @return \DateTimeImmutable|null
+ *   The parsed time in the site timezone, or NULL if unparseable.
+ */
+function _appointment_notifications_parse_host_start_time($value, string $timezone, $nid): ?\DateTimeImmutable {
+  if ($value === NULL || $value === '') {
+    return NULL;
+  }
+  try {
+    return _appointment_notifications_convert_smartdate_value($value, $timezone);
+  }
+  catch (\Exception $e) {
+    // Last-resort permissive parse before giving up.
+    $ts = strtotime((string) $value);
+    if ($ts !== FALSE) {
+      return (new \DateTimeImmutable('@' . $ts))->setTimezone(new \DateTimeZone($timezone));
+    }
+    \Drupal::logger('appointment_notifications')->warning('Could not parse host start time "@value" for appointment @nid; falling back to stored timerange. (@message)', [
+      '@value' => (string) $value,
+      '@nid' => $nid ?? 'unknown',
+      '@message' => $e->getMessage(),
+    ]);
+    return NULL;
+  }
 }
 
 /**
