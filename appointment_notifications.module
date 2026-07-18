@@ -362,7 +362,10 @@ function _appointment_notifications_get_schedule_details(Node $node, $start_time
     $base_start = NULL;
     $host_time_string = $host_start_time_raw;
     $has_date_component = preg_match('/\d{4}-\d{2}-\d{2}/', $host_start_time_raw);
-    if (!$has_date_component && !empty($date_only_string)) {
+    // A bare numeric unix timestamp is already an absolute instant; prepending
+    // the appointment date would corrupt it into an unparseable "Y-m-d <ts>"
+    // string and force a timerange fallback that shifts the emailed time.
+    if (!$has_date_component && !is_numeric($host_start_time_raw) && !empty($date_only_string)) {
       $host_time_string = $date_only_string . ' ' . $host_start_time_raw;
     }
 
@@ -384,7 +387,10 @@ function _appointment_notifications_get_schedule_details(Node $node, $start_time
   if (!$start_datetime instanceof \DateTimeInterface && !empty($host_start_time_raw)) {
     $host_time_string = $host_start_time_raw;
     $has_date_component = preg_match('/\d{4}-\d{2}-\d{2}/', $host_start_time_raw);
-    if (!$has_date_component && !empty($date_only_string)) {
+    // A bare numeric unix timestamp is already an absolute instant; prepending
+    // the appointment date would corrupt it into an unparseable "Y-m-d <ts>"
+    // string and force a timerange fallback that shifts the emailed time.
+    if (!$has_date_component && !is_numeric($host_start_time_raw) && !empty($date_only_string)) {
       $host_time_string = $date_only_string . ' ' . $host_start_time_raw;
     }
 
