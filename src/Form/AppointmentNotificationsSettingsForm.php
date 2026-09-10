@@ -166,7 +166,7 @@ class AppointmentNotificationsSettingsForm extends ConfigFormBase {
       '#tree' => TRUE, 
       '#collapsible' => TRUE,
       '#collapsed' => FALSE,
-      '#description' => $this->t('This email is sent on the first cron run at least 30 minutes after the scheduled appointment end, unless written feedback already exists. Date-only appointments receive it the following day. The "From" address is the Sender Email Address and the "To" address is the member\'s email.'),
+      '#description' => $this->t('This email is sent on the first cron run at or after the scheduled appointment start, unless written feedback already exists. Date-only appointments receive it the following day. The "From" address is the Sender Email Address and the "To" address is the member\'s email.'),
     ];
 
     $form['feedback_invitation']['email_subject_feedback_invitation'] = [

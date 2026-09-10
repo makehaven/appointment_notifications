@@ -1381,11 +1381,11 @@ function _appointment_notifications_process_feedback(): void {
       ->condition('type', 'appointment')
       ->condition('status', 1)
       ->condition('field_appointment_status', 'canceled', '<>')
-      ->condition('field_appointment_timerange.end_value', $cutoff, '>=')
-      ->condition('field_appointment_timerange.value', $now - 1800, '<=')
+      ->condition('field_appointment_timerange.value', $cutoff, '>=')
+      ->condition('field_appointment_timerange.value', $now, '<=')
       ->accessCheck(FALSE)
       ->execute();
-    // Include legacy date/slot records; resolve their actual end below.
+    // Include legacy date/slot records; resolve their actual start below.
     $date_ids = \Drupal::entityQuery('node')
       ->condition('type', 'appointment')
       ->condition('status', 1)
@@ -1404,16 +1404,16 @@ function _appointment_notifications_process_feedback(): void {
       if ($node->hasField('field_appointment_feedback') && trim((string) $node->get('field_appointment_feedback')->value) !== '') {
         continue;
       }
-      // Use the same slot-aware end as the booking email/calendar invitation.
+      // Use the same slot-aware start as the booking email/calendar invitation.
       $details = _appointment_notifications_get_schedule_details($node);
-      $end = $details['end_datetime'] ?? NULL;
-      if ($end instanceof \DateTimeInterface) {
-        if ($end->getTimestamp() < $cutoff || $end->getTimestamp() + 1800 > $now) {
+      $start = $details['start_datetime'] ?? NULL;
+      if ($start instanceof \DateTimeInterface) {
+        if ($start->getTimestamp() < $cutoff || $start->getTimestamp() > $now) {
           continue;
         }
       }
       else {
-        // No end time: wait until the next local calendar day, as before.
+        // No start time: wait until the next local calendar day, as before.
         $date = $node->hasField('field_appointment_date') ? $node->get('field_appointment_date')->value : NULL;
         if (!$date || $date >= $today->format('Y-m-d')) {
           continue;

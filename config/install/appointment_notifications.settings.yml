@@ -73,12 +73,12 @@ email_body_canceled: |
   Best regards,
   The MakeHaven Team
 
-# Feedback invitation (standalone follow-up if used)
+# Feedback invitation (eligible from the appointment start)
 email_subject_feedback_invitation: 'We value your feedback on "@title" (@date)'
 email_body_feedback_invitation: |
   Dear @recipient_name,
 
-  Thanks for attending "@title" on @date. We’d appreciate your feedback.
+  When you have finished your appointment "@title" on @date, please take a minute to tell us how it went.
 
   Share feedback: @feedback_link
 

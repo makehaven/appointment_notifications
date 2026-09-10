@@ -120,9 +120,9 @@ class AppointmentNotificationsCronTest extends KernelTestBase {
   }
 
   /**
-   * Checks end-time boundaries, suppression, fallback and one-time delivery.
+   * Checks start-time boundaries, suppression, fallback and one-time delivery.
    */
-  public function testFeedbackAfterEnd(): void {
+  public function testFeedbackAtStart(): void {
     $now = strtotime('2026-09-10 19:00:00 UTC');
     $clock = $this->createMock(TimeInterface::class);
     $clock->method('getRequestTime')->willReturn($now);
@@ -141,11 +141,11 @@ class AppointmentNotificationsCronTest extends KernelTestBase {
     $this->ensureField('field_appointment_slot', 'string', ['max_length' => 255]);
     $this->attachField('field_appointment_slot', 'Slot');
 
-    $due = $this->feedbackAppointment($now - 1800);
-    $later = $this->feedbackAppointment($now - 1799);
-    $ongoing = $this->feedbackAppointment($now + 3600);
-    // A stale legacy date must not send an ongoing timerange appointment early.
-    $ongoing->set('field_appointment_date', '2026-09-09')->save();
+    $due = $this->feedbackAppointment($now + 3600);
+    $later = $this->feedbackAppointment($now + 3601);
+    $future = $this->feedbackAppointment($now + 7200);
+    // A stale legacy date must not send a future timerange appointment early.
+    $future->set('field_appointment_date', '2026-09-09')->save();
     $this->feedbackAppointment($now - 1800, ['field_appointment_status' => 'canceled']);
     $this->feedbackAppointment($now - 1800, ['status' => 0]);
     $this->feedbackAppointment($now - 1800, ['field_appointment_feedback' => 'Already answered']);
@@ -154,7 +154,7 @@ class AppointmentNotificationsCronTest extends KernelTestBase {
     // Host/slot timing wins over a broad stored shift window.
     $slot = $this->feedbackAppointment($now + 3600, [
       'field_appointment_date' => '2026-09-10',
-      'field_host_start_time' => '2026-09-10 14:00:00',
+      'field_host_start_time' => '2026-09-10 15:00:00',
       'field_appointment_slot' => '1',
     ]);
 
@@ -169,13 +169,16 @@ class AppointmentNotificationsCronTest extends KernelTestBase {
     $messages = \Drupal::state()->get('system.test_mail_collector', []);
     $this->assertCount(4, $messages);
     $this->assertSame('appointment_notifications_appointment_feedback_invitation', $messages[0]['id']);
-    $this->assertStringContainsString('/appointment/' . $due->id() . '/feedback', $messages[0]['body']);
+    $due_messages = array_values(array_filter($messages, static fn(array $message): bool => $message['to'] === $due->getOwner()->getEmail()));
+    $this->assertCount(1, $due_messages);
+    $this->assertStringContainsString('/appointment/' . $due->id() . '/feedback', $due_messages[0]['body']);
+    $this->assertStringContainsString('When you have finished', $due_messages[0]['body']);
     $sent = \Drupal::state()->get('appointment_notifications.sent.feedback');
     foreach ([$due, $outcome, $legacy, $old_sent, $slot] as $node) {
       $this->assertArrayHasKey($node->id(), $sent);
     }
     $this->assertArrayNotHasKey($later->id(), $sent);
-    $this->assertArrayNotHasKey($ongoing->id(), $sent);
+    $this->assertArrayNotHasKey($future->id(), $sent);
     appointment_notifications_cron();
     $this->assertCount(4, \Drupal::state()->get('system.test_mail_collector'));
     $now++;
@@ -183,11 +186,11 @@ class AppointmentNotificationsCronTest extends KernelTestBase {
     $this->assertCount(5, \Drupal::state()->get('system.test_mail_collector'));
     $this->assertArrayHasKey($later->id(), \Drupal::state()->get('appointment_notifications.sent.feedback'));
     // Moving the session forward must postpone its pending invitation.
-    $ongoing->set('field_appointment_timerange', ['value' => $now + 3600, 'end_value' => $now + 7200, 'duration' => 60])->save();
-    $now++;
+    $future->set('field_appointment_timerange', ['value' => $now + 7200, 'end_value' => $now + 10800, 'duration' => 60])->save();
+    $now += 3600;
     appointment_notifications_cron();
     $this->assertCount(5, \Drupal::state()->get('system.test_mail_collector'));
-    $this->assertArrayNotHasKey($ongoing->id(), \Drupal::state()->get('appointment_notifications.sent.feedback'));
+    $this->assertArrayNotHasKey($future->id(), \Drupal::state()->get('appointment_notifications.sent.feedback'));
   }
 
   /**
