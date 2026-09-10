@@ -2,6 +2,9 @@
 
 namespace Drupal\Tests\appointment_notifications\Kernel;
 
+use Drupal\Core\Lock\LockBackendInterface;
+use Drupal\Core\Mail\MailManagerInterface;
+use Drupal\Component\Datetime\TimeInterface;
 use Drupal\field\Entity\FieldConfig;
 use Drupal\field\Entity\FieldStorageConfig;
 use Drupal\KernelTests\KernelTestBase;
@@ -114,6 +117,142 @@ class AppointmentNotificationsCronTest extends KernelTestBase {
     $this->assertArrayHasKey($appointment->id(), $host_sent);
     $this->assertSame($tomorrow, $member_sent[$appointment->id()]);
     $this->assertSame($tomorrow, $host_sent[$appointment->id()]);
+  }
+
+  /**
+   * Checks end-time boundaries, suppression, fallback and one-time delivery.
+   */
+  public function testFeedbackAfterEnd(): void {
+    $now = strtotime('2026-09-10 19:00:00 UTC');
+    $clock = $this->createMock(TimeInterface::class);
+    $clock->method('getRequestTime')->willReturn($now);
+    $clock->method('getCurrentTime')->willReturnCallback(static function () use (&$now) {
+      return $now;
+    });
+    $this->container->set('datetime.time', $clock);
+    \Drupal::configFactory()->getEditable('system.date')->set('timezone.default', 'America/New_York')->save();
+    \Drupal::configFactory()->getEditable('system.mail')->set('interface.default', 'test_mail_collector')->save();
+    \Drupal::configFactory()->getEditable('appointment_notifications.settings')
+      ->set('development_mode', TRUE)->set('email_logging', FALSE)
+      ->set('reminder_enabled', FALSE)->set('calendar_invites_enabled', FALSE)->save();
+
+    $this->ensureField('field_host_start_time', 'string', ['max_length' => 255]);
+    $this->attachField('field_host_start_time', 'Host start');
+    $this->ensureField('field_appointment_slot', 'string', ['max_length' => 255]);
+    $this->attachField('field_appointment_slot', 'Slot');
+
+    $due = $this->feedbackAppointment($now - 1800);
+    $later = $this->feedbackAppointment($now - 1799);
+    $ongoing = $this->feedbackAppointment($now + 3600);
+    // A stale legacy date must not send an ongoing timerange appointment early.
+    $ongoing->set('field_appointment_date', '2026-09-09')->save();
+    $this->feedbackAppointment($now - 1800, ['field_appointment_status' => 'canceled']);
+    $this->feedbackAppointment($now - 1800, ['status' => 0]);
+    $this->feedbackAppointment($now - 1800, ['field_appointment_feedback' => 'Already answered']);
+    $outcome = $this->feedbackAppointment($now - 1800, ['field_appointment_result' => 'met_successful']);
+    $legacy = $this->feedbackAppointment(NULL, ['field_appointment_date' => '2026-09-09']);
+    // Host/slot timing wins over a broad stored shift window.
+    $slot = $this->feedbackAppointment($now + 3600, [
+      'field_appointment_date' => '2026-09-10',
+      'field_host_start_time' => '2026-09-10 14:00:00',
+      'field_appointment_slot' => '1',
+    ]);
+
+    $this->feedbackAppointment(NULL, ['field_appointment_date' => '2026-09-10']);
+    $this->feedbackAppointment($now - 4 * 86400);
+    $this->feedbackAppointment($now - 2 * 86400);
+    $old_sent = $this->feedbackAppointment($now - 1800);
+    \Drupal::state()->set('appointment_notifications.sent.feedback', [$old_sent->id() => '2026-09-09']);
+    \Drupal::configFactory()->getEditable('appointment_notifications.settings')->set('development_mode', FALSE)->save();
+
+    appointment_notifications_cron();
+    $messages = \Drupal::state()->get('system.test_mail_collector', []);
+    $this->assertCount(4, $messages);
+    $this->assertSame('appointment_notifications_appointment_feedback_invitation', $messages[0]['id']);
+    $this->assertStringContainsString('/appointment/' . $due->id() . '/feedback', $messages[0]['body']);
+    $sent = \Drupal::state()->get('appointment_notifications.sent.feedback');
+    foreach ([$due, $outcome, $legacy, $old_sent, $slot] as $node) {
+      $this->assertArrayHasKey($node->id(), $sent);
+    }
+    $this->assertArrayNotHasKey($later->id(), $sent);
+    $this->assertArrayNotHasKey($ongoing->id(), $sent);
+    appointment_notifications_cron();
+    $this->assertCount(4, \Drupal::state()->get('system.test_mail_collector'));
+    $now++;
+    appointment_notifications_cron();
+    $this->assertCount(5, \Drupal::state()->get('system.test_mail_collector'));
+    $this->assertArrayHasKey($later->id(), \Drupal::state()->get('appointment_notifications.sent.feedback'));
+    // Moving the session forward must postpone its pending invitation.
+    $ongoing->set('field_appointment_timerange', ['value' => $now + 3600, 'end_value' => $now + 7200, 'duration' => 60])->save();
+    $now++;
+    appointment_notifications_cron();
+    $this->assertCount(5, \Drupal::state()->get('system.test_mail_collector'));
+    $this->assertArrayNotHasKey($ongoing->id(), \Drupal::state()->get('appointment_notifications.sent.feedback'));
+  }
+
+  /**
+   * Failed mail can catch up after a missed day, but not beyond three days.
+   */
+  public function testFeedbackRetryAndLock(): void {
+    $now = strtotime('2026-09-10 19:00:00 UTC');
+    $clock = $this->createMock(TimeInterface::class);
+    $clock->method('getRequestTime')->willReturn($now);
+    $clock->method('getCurrentTime')->willReturnCallback(static function () use (&$now) {
+      return $now;
+    });
+    $this->container->set('datetime.time', $clock);
+    \Drupal::configFactory()->getEditable('appointment_notifications.settings')
+      ->set('development_mode', TRUE)->set('email_logging', FALSE)
+      ->set('reminder_enabled', FALSE)->set('calendar_invites_enabled', FALSE)->save();
+    $node = $this->feedbackAppointment($now - 1800);
+    \Drupal::configFactory()->getEditable('appointment_notifications.settings')->set('development_mode', FALSE)->save();
+    $mail = $this->createMock(MailManagerInterface::class);
+    $mail->expects($this->exactly(2))->method('mail')->willReturnOnConsecutiveCalls(['result' => FALSE], ['result' => TRUE]);
+    $this->container->set('plugin.manager.mail', $mail);
+    $lock = $this->createMock(LockBackendInterface::class);
+    $lock->method('acquire')->willReturn(FALSE);
+    $original_lock = $this->container->get('lock');
+    $this->container->set('lock', $lock);
+    _appointment_notifications_process_feedback();
+    $this->assertNull(\Drupal::state()->get('appointment_notifications.feedback_since'));
+    $this->container->set('lock', $original_lock);
+    _appointment_notifications_process_feedback();
+    $this->assertArrayNotHasKey($node->id(), \Drupal::state()->get('appointment_notifications.sent.feedback', []));
+    $now += 2 * 86400;
+    _appointment_notifications_process_feedback();
+    $this->assertArrayHasKey($node->id(), \Drupal::state()->get('appointment_notifications.sent.feedback'));
+    // Even without a success marker, an expired appointment is no longer due.
+    \Drupal::state()->set('appointment_notifications.sent.feedback', []);
+    $now += 2 * 86400;
+    _appointment_notifications_process_feedback();
+    $this->assertSame([], \Drupal::state()->get('appointment_notifications.sent.feedback'));
+  }
+
+  /**
+   * Creates an appointment without sending fixture notifications.
+   */
+  protected function feedbackAppointment(?int $end, array $overrides = []): Node {
+    $member = User::create([
+      'name' => $this->randomMachineName(),
+      'mail' => $this->randomMachineName() . '@example.com',
+      'status' => 1,
+    ]);
+    $member->save();
+    $values = [
+      'type' => 'appointment',
+      'title' => 'Feedback timing',
+      'uid' => $member->id(),
+      'status' => 1,
+      'field_appointment_status' => 'scheduled',
+      'field_appointment_host' => $member->id(),
+      'field_appointment_purpose' => 'project',
+    ];
+    if ($end !== NULL) {
+      $values['field_appointment_timerange'] = ['value' => $end - 3600, 'end_value' => $end, 'duration' => 60];
+    }
+    $node = Node::create(array_replace($values, $overrides));
+    $node->save();
+    return $node;
   }
 
   /**

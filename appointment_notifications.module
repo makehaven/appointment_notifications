@@ -1294,40 +1294,7 @@ function appointment_notifications_cron() {
   $config = \Drupal::config('appointment_notifications.settings');
   $site_timezone = \Drupal::config('system.date')->get('timezone.default') ?: 'UTC';
   $now = new \DateTime('now', new \DateTimeZone($site_timezone));
-  $feedback_date = (clone $now)->modify('-1 day')->format('Y-m-d');
-
-  // Query by date field (legacy path).
-  $feedback_nids_by_date = \Drupal::entityQuery('node')
-    ->condition('type', 'appointment')
-    ->condition('field_appointment_status', 'canceled', '<>')
-    ->condition('field_appointment_date', $feedback_date)
-    ->accessCheck(FALSE)
-    ->execute();
-
-  // Also catch appointments stored via timerange (start falls on feedback day).
-  $feedback_day_start = (clone $now)->modify('-1 day')->setTime(0, 0, 0)->getTimestamp();
-  $feedback_day_end   = (clone $now)->modify('-1 day')->setTime(23, 59, 59)->getTimestamp();
-  $feedback_nids_by_range = \Drupal::entityQuery('node')
-    ->condition('type', 'appointment')
-    ->condition('field_appointment_status', 'canceled', '<>')
-    ->condition('field_appointment_timerange.value', $feedback_day_start, '>=')
-    ->condition('field_appointment_timerange.value', $feedback_day_end, '<=')
-    ->accessCheck(FALSE)
-    ->execute();
-
-  $nids = array_unique(array_merge(array_values($feedback_nids_by_date), array_values($feedback_nids_by_range)));
-
-  if (!empty($nids)) {
-    $nodes = Node::loadMultiple($nids);
-
-    foreach ($nodes as $node) {
-      if (_appointment_notifications_should_send($node, 'feedback', $feedback_date)) {
-        if (_appointment_notifications_send_feedback_invitation($node)) {
-          _appointment_notifications_mark_sent($node, 'feedback', $feedback_date);
-        }
-      }
-    }
-  }
+  _appointment_notifications_process_feedback();
 
   if ($config->get('reminder_enabled')) {
     $days_before = (int) ($config->get('reminder_days_before') ?? 1);
@@ -1381,9 +1348,86 @@ function appointment_notifications_cron() {
   }
 
   // Prune sent-state arrays once per cron run to keep them bounded.
-  _appointment_notifications_prune_sent_state('feedback');
   _appointment_notifications_prune_sent_state('member_reminder');
   _appointment_notifications_prune_sent_state('host_reminder');
+}
+
+/**
+ * Sends due feedback invitations, with bounded retries and a rollout cutoff.
+ */
+function _appointment_notifications_process_feedback(): void {
+  $lock = \Drupal::lock();
+  if (!$lock->acquire('appointment_notifications.feedback', 300.0)) {
+    return;
+  }
+
+  try {
+    $now = \Drupal::time()->getCurrentTime();
+    $state = \Drupal::state();
+    // Refresh after acquiring the lock in case another worker sent mail.
+    $state->resetCache();
+    _appointment_notifications_prune_sent_state('feedback');
+    // Preserve yesterday's pending invitations at rollout, without backfilling
+    // older history. Subsequent failures can catch up for three days.
+    $timezone = new \DateTimeZone(\Drupal::config('system.date')->get('timezone.default') ?: 'UTC');
+    $today = (new \DateTimeImmutable('@' . $now))->setTimezone($timezone);
+    $since = $state->get('appointment_notifications.feedback_since');
+    if ($since === NULL) {
+      $since = $today->modify('-1 day')->setTime(0, 0)->getTimestamp();
+      $state->set('appointment_notifications.feedback_since', $since);
+    }
+    $cutoff = max((int) $since, $now - 3 * 86400);
+    $range_ids = \Drupal::entityQuery('node')
+      ->condition('type', 'appointment')
+      ->condition('status', 1)
+      ->condition('field_appointment_status', 'canceled', '<>')
+      ->condition('field_appointment_timerange.end_value', $cutoff, '>=')
+      ->condition('field_appointment_timerange.value', $now - 1800, '<=')
+      ->accessCheck(FALSE)
+      ->execute();
+    // Include legacy date/slot records; resolve their actual end below.
+    $date_ids = \Drupal::entityQuery('node')
+      ->condition('type', 'appointment')
+      ->condition('status', 1)
+      ->condition('field_appointment_status', 'canceled', '<>')
+      ->condition('field_appointment_date', (new \DateTimeImmutable('@' . $cutoff))->setTimezone($timezone)->format('Y-m-d'), '>=')
+      ->condition('field_appointment_date', $today->format('Y-m-d'), '<=')
+      ->accessCheck(FALSE)
+      ->execute();
+    $ids = array_unique(array_merge(array_values($range_ids), array_values($date_ids)));
+    // A feedback request is sent once per appointment, including legacy markers.
+    $sent = $state->get('appointment_notifications.sent.feedback', []);
+    foreach (Node::loadMultiple($ids) as $node) {
+      if (isset($sent[$node->id()]) || _appointment_notifications_is_canceled($node)) {
+        continue;
+      }
+      if ($node->hasField('field_appointment_feedback') && trim((string) $node->get('field_appointment_feedback')->value) !== '') {
+        continue;
+      }
+      // Use the same slot-aware end as the booking email/calendar invitation.
+      $details = _appointment_notifications_get_schedule_details($node);
+      $end = $details['end_datetime'] ?? NULL;
+      if ($end instanceof \DateTimeInterface) {
+        if ($end->getTimestamp() < $cutoff || $end->getTimestamp() + 1800 > $now) {
+          continue;
+        }
+      }
+      else {
+        // No end time: wait until the next local calendar day, as before.
+        $date = $node->hasField('field_appointment_date') ? $node->get('field_appointment_date')->value : NULL;
+        if (!$date || $date >= $today->format('Y-m-d')) {
+          continue;
+        }
+      }
+      // A host-recorded result alone does not mean the member gave feedback.
+      if (_appointment_notifications_send_feedback_invitation($node)) {
+        _appointment_notifications_mark_sent($node, 'feedback', $today->format('Y-m-d'));
+      }
+    }
+  }
+  finally {
+    $lock->release('appointment_notifications.feedback');
+  }
 }
 
 /**

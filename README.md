@@ -10,7 +10,7 @@ The `appointment_notifications` module is a custom Drupal module designed to sen
 - **Cancellation Notifications**: Sends an email to both the attendee and the host when an appointment is canceled. The attendee is CC'd in the cancellation notice sent to the host.
 - **Problem Reporting Notifications**: Sends a notification to a designated staff email address when an issue is reported during an appointment, such as a volunteer being absent or the meeting being unsuccessful.
 - **Reminder Emails**: Optionally send reminder emails to the attendee and host a configurable number of days before the appointment date.
-- **Feedback Invitations**: Sends a follow-up email the day after the appointment date inviting the attendee to share feedback.
+- **Feedback Invitations**: Sends a follow-up email on the first cron run at least 30 minutes after the appointment ends inviting the attendee to share feedback.
 - **Calendar Invites**: Attaches industry-standard `.ics` calendar files to scheduled and canceled appointment emails so members and hosts can add or remove the event from their calendars. Slot selections are used first (for exact appointment duration), then timerange data is used as a fallback.
 - **Development Mode**: When development mode is enabled, emails are logged and displayed on the screen instead of being sent.
 
@@ -49,7 +49,7 @@ When an appointment is created or updated, the module will automatically send no
 - **Calendar Invites**: Scheduling emails include an `.ics` invite and cancellation emails send a cancellation update so recipients' calendars stay in sync. Accurate slot selections and host start time produce the most precise invite window.
 - **Reminder**: When enabled, reminder emails are sent to the attendee and host the configured number of days before the appointment date.
 - **Problem Reporting**: If an appointment's result changes to a problem state (`volunteer_absent` or `met_unsuccessful`), a notification will be sent to the staff email address configured in the settings.
-- **Feedback Invitation**: The day after the appointment date, the attendee receives a single feedback invitation email.
+- **Feedback Invitation**: On the first cron run at least 30 minutes after the scheduled end, the booking member receives one feedback invitation email. Canceled/unpublished appointments and appointments with written feedback are skipped. A recorded outcome alone does not suppress the member invitation. Date-only appointments retain next-calendar-day delivery. Failed sends retry for up to three days; the initial run includes only yesterday onward, and existing sent markers prevent repeat invitations. No Slack feedback messages are sent.
 
 ## Development
 
