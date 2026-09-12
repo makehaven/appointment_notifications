@@ -2,6 +2,8 @@
 
 namespace Drupal\Tests\appointment_notifications\Unit;
 
+use Drupal\Core\Config\ImmutableConfig;
+use Drupal\Core\Extension\ModuleHandlerInterface;
 use Drupal\Tests\UnitTestCase;
 
 /**
@@ -179,6 +181,35 @@ class IcsCalendarBuilderTest extends UnitTestCase {
   }
 
   /**
+   * Tests the ORGANIZER follows the SMTP module's From override.
+   *
+   * On live the SMTP module rewrites every From header to hello@makehaven.org
+   * while email_sender stays no-reply@makehaven.org. Gmail only renders an
+   * invitation with RSVP buttons when ORGANIZER matches the sender, so the
+   * builder must use the effective From, not the configured email_sender.
+   */
+  public function testOrganizerFollowsSmtpFromOverride(): void {
+    $node = $this->createMockNode(43, 'Organizer Test');
+    $utc = new \DateTimeZone('UTC');
+    $schedule_details = [
+      'start_datetime' => new \DateTimeImmutable('2026-09-14 21:00:00', $utc),
+      'end_datetime' => new \DateTimeImmutable('2026-09-14 21:30:00', $utc),
+    ];
+
+    $this->setupDrupalConfigMock('no-reply@makehaven.org', 'MakeHaven', 'America/New_York', 'hello@makehaven.org');
+    $attachment = _appointment_notifications_build_calendar_attachment($node, $schedule_details, 'member_scheduled', [
+      ['email' => 'member@test.com', 'name' => 'Test Member'],
+    ]);
+    $this->assertStringContainsString('ORGANIZER;CN=MakeHaven:mailto:hello@makehaven.org', $attachment['filecontent']);
+    $this->assertStringNotContainsString('no-reply@makehaven.org', $attachment['filecontent']);
+
+    // SMTP off (or unset): fall back to the module's own sender.
+    $this->setupDrupalConfigMock('no-reply@makehaven.org', 'MakeHaven');
+    $attachment = _appointment_notifications_build_calendar_attachment($node, $schedule_details, 'member_scheduled', []);
+    $this->assertStringContainsString('ORGANIZER;CN=MakeHaven:mailto:no-reply@makehaven.org', $attachment['filecontent']);
+  }
+
+  /**
    * Tests ICS builder produces correct UTC times from Eastern timestamps.
    *
    * This is the critical test: verifies that an appointment at 2:30 PM EST
@@ -233,7 +264,7 @@ class IcsCalendarBuilderTest extends UnitTestCase {
     $this->assertStringContainsString('STATUS:CONFIRMED', $content);
     $this->assertStringContainsString('SUMMARY:Test Appointment EST', $content);
     $this->assertStringContainsString('UID:appointment-42@makehaven.org', $content);
-    $this->assertStringContainsString('ATTENDEE;CN=Test Member;ROLE=REQ-PARTICIPANT:mailto:member@test.com', $content);
+    $this->assertStringContainsString('ATTENDEE;CN=Test Member;ROLE=REQ-PARTICIPANT;CUTYPE=INDIVIDUAL;RSVP=TRUE;PARTSTAT=NEEDS-ACTION:mailto:member@test.com', $content);
     $this->assertStringContainsString('ORGANIZER;CN=MakeHaven:mailto:no-reply@makehaven.org', $content);
 
     // Verify CRLF line endings.
@@ -531,8 +562,8 @@ class IcsCalendarBuilderTest extends UnitTestCase {
   /**
    * Sets up Drupal service container mocks for config access.
    */
-  protected function setupDrupalConfigMock(string $email_sender, string $site_name, string $site_timezone = 'America/New_York'): void {
-    $appointment_config = $this->createMock(\Drupal\Core\Config\ImmutableConfig::class);
+  protected function setupDrupalConfigMock(string $email_sender, string $site_name, string $site_timezone = 'America/New_York', ?string $smtp_from = NULL): void {
+    $appointment_config = $this->createMock(ImmutableConfig::class);
     $appointment_config->method('get')->willReturnCallback(function ($key) use ($email_sender) {
       if ($key === 'email_sender') {
         return $email_sender;
@@ -540,7 +571,7 @@ class IcsCalendarBuilderTest extends UnitTestCase {
       return NULL;
     });
 
-    $site_config = $this->createMock(\Drupal\Core\Config\ImmutableConfig::class);
+    $site_config = $this->createMock(ImmutableConfig::class);
     $site_config->method('get')->willReturnCallback(function ($key) use ($site_name) {
       if ($key === 'name') {
         return $site_name;
@@ -548,7 +579,7 @@ class IcsCalendarBuilderTest extends UnitTestCase {
       return NULL;
     });
 
-    $date_config = $this->createMock(\Drupal\Core\Config\ImmutableConfig::class);
+    $date_config = $this->createMock(ImmutableConfig::class);
     $date_config->method('get')->willReturnCallback(function ($key) use ($site_timezone) {
       if ($key === 'timezone.default') {
         return $site_timezone;
@@ -556,8 +587,19 @@ class IcsCalendarBuilderTest extends UnitTestCase {
       return NULL;
     });
 
+    $smtp_config = $this->createMock(ImmutableConfig::class);
+    $smtp_config->method('get')->willReturnCallback(function ($key) use ($smtp_from) {
+      if ($key === 'smtp_on') {
+        return $smtp_from !== NULL;
+      }
+      if ($key === 'smtp_from') {
+        return $smtp_from;
+      }
+      return NULL;
+    });
+
     $config_factory = $this->createMock(\Drupal\Core\Config\ConfigFactoryInterface::class);
-    $config_factory->method('get')->willReturnCallback(function ($name) use ($appointment_config, $site_config, $date_config) {
+    $config_factory->method('get')->willReturnCallback(function ($name) use ($appointment_config, $site_config, $date_config, $smtp_config) {
       if ($name === 'appointment_notifications.settings') {
         return $appointment_config;
       }
@@ -567,11 +609,22 @@ class IcsCalendarBuilderTest extends UnitTestCase {
       if ($name === 'system.date') {
         return $date_config;
       }
-      return $this->createMock(\Drupal\Core\Config\ImmutableConfig::class);
+      if ($name === 'smtp.settings') {
+        return $smtp_config;
+      }
+      return $this->createMock(ImmutableConfig::class);
+    });
+
+    // The SMTP module, when enabled, rewrites From to its own smtp_from; the
+    // ICS ORGANIZER must follow it. Passing $smtp_from simulates that setup.
+    $module_handler = $this->createMock(ModuleHandlerInterface::class);
+    $module_handler->method('moduleExists')->willReturnCallback(function ($name) use ($smtp_from) {
+      return $name === 'smtp' && $smtp_from !== NULL;
     });
 
     $container = new \Symfony\Component\DependencyInjection\ContainerBuilder();
     $container->set('config.factory', $config_factory);
+    $container->set('module_handler', $module_handler);
     \Drupal::setContainer($container);
   }
 

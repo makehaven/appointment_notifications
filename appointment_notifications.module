@@ -725,7 +725,7 @@ function _appointment_notifications_send_rebooked_email(Node $node, \Drupal\user
   }
 
   $mailManager = \Drupal::service('plugin.manager.mail');
-  $sender = $config->get('email_sender');
+  $sender = _appointment_notifications_effective_sender();
   $language = \Drupal::currentUser()->getPreferredLangcode();
 
   $details = _appointment_notifications_get_schedule_details($node);
@@ -908,6 +908,32 @@ function _appointment_notifications_prune_sent_state(string $type, int $days = 9
 }
 
 /**
+ * Returns the address outgoing appointment mail is actually sent from.
+ *
+ * The SMTP module rewrites the From header of every message to its own
+ * `smtp_from` when that is set (on live it is hello@makehaven.org via a
+ * settings.php override), so the module's `email_sender` is not what the
+ * recipient sees. Calendar clients (Gmail in particular) only treat an
+ * iCalendar REQUEST as an actionable invitation when the ORGANIZER matches the
+ * sender, so the ORGANIZER line must be built from the same address that ends
+ * up in From. Falls back to `email_sender` when SMTP is off or unset.
+ *
+ * @return string
+ *   The effective sender email address.
+ */
+function _appointment_notifications_effective_sender(): string {
+  $configured = (string) (\Drupal::config('appointment_notifications.settings')->get('email_sender') ?: '');
+  if (\Drupal::moduleHandler()->moduleExists('smtp')) {
+    $smtp = \Drupal::config('smtp.settings');
+    $smtp_from = trim((string) ($smtp->get('smtp_from') ?: ''));
+    if ($smtp->get('smtp_on') && $smtp_from !== '' && filter_var($smtp_from, FILTER_VALIDATE_EMAIL)) {
+      return $smtp_from;
+    }
+  }
+  return $configured !== '' ? $configured : 'no-reply@example.com';
+}
+
+/**
  * Escapes text for use within an ICS file.
  *
  * @param string $value
@@ -958,8 +984,7 @@ function _appointment_notifications_build_calendar_attachment(Node $node, array 
   $status = ($method === 'CANCEL') ? 'CANCELLED' : 'CONFIRMED';
   $sequence = ($method === 'CANCEL') ? 1 : 0;
 
-  $config = \Drupal::config('appointment_notifications.settings');
-  $organizer_email = $config->get('email_sender') ?: 'no-reply@example.com';
+  $organizer_email = _appointment_notifications_effective_sender();
   $site_name = \Drupal::config('system.site')->get('name') ?: 'MakeHaven';
 
   $uid = 'appointment-' . $node->id() . '@makehaven.org';
@@ -1017,7 +1042,10 @@ function _appointment_notifications_build_calendar_attachment(Node $node, array 
       continue;
     }
     $participant_name = !empty($participant['name']) ? $participant['name'] : $participant['email'];
-    $lines[] = 'ATTENDEE;CN=' . _appointment_notifications_ics_escape($participant_name) . ';ROLE=REQ-PARTICIPANT:mailto:' . $participant['email'];
+    // RSVP=TRUE + PARTSTAT=NEEDS-ACTION is what makes Gmail/Outlook render the
+    // Yes/No/Maybe buttons instead of a passive "add to calendar" chip.
+    $lines[] = 'ATTENDEE;CN=' . _appointment_notifications_ics_escape($participant_name)
+      . ';ROLE=REQ-PARTICIPANT;CUTYPE=INDIVIDUAL;RSVP=TRUE;PARTSTAT=NEEDS-ACTION:mailto:' . $participant['email'];
   }
 
   if (!empty($context['link'])) {
@@ -1044,7 +1072,7 @@ function _appointment_notifications_send_email(Node $node, $action) {
   $module = 'appointment_notifications';
   $key = 'appointment_' . $action;
   $language = \Drupal::currentUser()->getPreferredLangcode();
-  $sender = $config->get('email_sender');
+  $sender = _appointment_notifications_effective_sender();
   $development_mode = $config->get('development_mode');
   $email_logging = $config->get('email_logging');
 
@@ -1439,7 +1467,7 @@ function _appointment_notifications_send_feedback_invitation(Node $node) {
   $module = 'appointment_notifications';
   $key = 'appointment_feedback_invitation';
   $language = \Drupal::currentUser()->getPreferredLangcode();
-  $sender = $config->get('email_sender');
+  $sender = _appointment_notifications_effective_sender();
   $development_mode = $config->get('development_mode');
   $email_logging = $config->get('email_logging');
 
@@ -1516,7 +1544,7 @@ function _appointment_notifications_send_problem_notice(Node $node) {
   $module = 'appointment_notifications';
   $key = 'appointment_problem_notice';
   $language = \Drupal::currentUser()->getPreferredLangcode();
-  $sender = $config->get('email_sender');
+  $sender = _appointment_notifications_effective_sender();
   $to_emails = array_filter(array_map('trim', preg_split('/[\r\n,]+/', $config->get('staff_email') ?? '')));
   $development_mode = $config->get('development_mode');
   $email_logging = $config->get('email_logging');
