@@ -176,6 +176,16 @@ function _appointment_notifications_build_cancel_action_element(Node $entity): a
     return [];
   }
 
+  // Signed links expire a day after the start (see
+  // _appointment_notifications_cancel_link()); past that the button would
+  // only lead to "Access denied".
+  $start_ts = ($entity->hasField('field_appointment_timerange') && !$entity->get('field_appointment_timerange')->isEmpty())
+    ? (int) $entity->get('field_appointment_timerange')->value
+    : 0;
+  if ($start_ts > 0 && $start_ts + (24 * 60 * 60) < \Drupal::time()->getRequestTime()) {
+    return [];
+  }
+
   $audience = $is_owner ? 'member' : 'host';
   $cancel_link = _appointment_notifications_cancel_link($entity, $audience);
   if (empty($cancel_link)) {
