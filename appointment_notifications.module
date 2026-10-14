@@ -119,7 +119,7 @@ function appointment_notifications_preprocess_node(array &$variables): void {
         '#type' => 'container',
         '#attributes' => ['class' => ['appointment-canceled-notice', 'alert', 'alert-danger']],
         'text' => [
-          '#markup' => t('<strong>Canceled Appointment</strong><br>This appointment has been canceled.'),
+          '#markup' => _appointment_notifications_canceled_notice_text($variables['node']),
         ],
         '#weight' => -70,
       ];
@@ -137,7 +137,7 @@ function appointment_notifications_preprocess_node(array &$variables): void {
 }
 
 /**
- * Builds cancel action render element for appointment owner/host.
+ * Builds cancel action render element for appointment owner/host/staff.
  */
 function _appointment_notifications_build_cancel_action_element(Node $entity): array {
   if (!function_exists('_appointment_notifications_cancel_link')) {
@@ -168,7 +168,11 @@ function _appointment_notifications_build_cancel_action_element(Node $entity): a
 
   $is_owner = ($current_uid > 0 && $current_uid === $owner_uid);
   $is_host = ($current_uid > 0 && $current_uid === $host_uid);
-  if (!$is_owner && !$is_host) {
+  // Staff who can edit any appointment get the same button, so they no
+  // longer have to masquerade as the member or facilitator. It uses the
+  // host link, which cancels the whole session for everyone.
+  $is_staff = $account->hasPermission('edit any appointment content');
+  if (!$is_owner && !$is_host && !$is_staff) {
     return [];
   }
 
@@ -191,6 +195,19 @@ function _appointment_notifications_build_cancel_action_element(Node $entity): a
     ],
     '#weight' => -55,
   ];
+}
+
+/**
+ * Builds the text of the cancelled-appointment notice.
+ */
+function _appointment_notifications_canceled_notice_text(Node $node): \Drupal\Component\Render\MarkupInterface {
+  $role = $node->hasField('field_appointment_canceled_by') ? (string) $node->get('field_appointment_canceled_by')->value : '';
+  return match ($role) {
+    'member' => t('<strong>Canceled Appointment</strong><br>This appointment was canceled by the member who booked it.'),
+    'facilitator' => t('<strong>Canceled Appointment</strong><br>This appointment was canceled by the facilitator.'),
+    'staff' => t('<strong>Canceled Appointment</strong><br>This appointment was canceled by MakeHaven staff.'),
+    default => t('<strong>Canceled Appointment</strong><br>This appointment has been canceled.'),
+  };
 }
 
 /**
@@ -222,6 +239,87 @@ function appointment_notifications_page_attachments(array &$attachments): void {
       ];
     }
   }
+}
+
+/**
+ * Implements hook_node_presave().
+ *
+ * Records who cancelled an appointment (the member who booked it, the
+ * facilitator, or staff) when it first becomes cancelled, whichever path
+ * cancelled it: the cancel link, the facilitator quick-cancel, or the edit
+ * form.
+ */
+function appointment_notifications_node_presave(\Drupal\node\NodeInterface $node): void {
+  if (!$node instanceof Node || $node->bundle() !== 'appointment' || $node->isNew()) {
+    return;
+  }
+  if (!$node->hasField('field_appointment_canceled_by') || !$node->get('field_appointment_canceled_by')->isEmpty()) {
+    return;
+  }
+  if (!_appointment_notifications_is_canceled($node)) {
+    return;
+  }
+  $original = $node->getOriginal();
+  if ($original instanceof Node && _appointment_notifications_is_canceled($original)) {
+    return;
+  }
+
+  [$role, $name] = _appointment_notifications_resolve_canceller($node);
+  $node->set('field_appointment_canceled_by', $role);
+  if ($node->isNewRevision() && $name !== '') {
+    $node->setRevisionLogMessage((string) t('Cancelled by @name (@role).', [
+      '@name' => $name,
+      '@role' => $role,
+    ]));
+  }
+}
+
+/**
+ * Works out who is cancelling an appointment.
+ *
+ * Signed cancel links work while logged out, so the link form passes the
+ * link's audience through _appointment_notifications_cancel_audience().
+ *
+ * @return array
+ *   [role, display name]: role is member, facilitator, staff or system.
+ */
+function _appointment_notifications_resolve_canceller(Node $node): array {
+  $host = ($node->hasField('field_appointment_host') && !$node->get('field_appointment_host')->isEmpty())
+    ? $node->get('field_appointment_host')->entity
+    : NULL;
+  $owner = $node->getOwner();
+  $account = \Drupal::currentUser();
+  $uid = (int) $account->id();
+
+  if ($uid > 0 && $host && $uid === (int) $host->id()) {
+    return ['facilitator', $host->getDisplayName()];
+  }
+  if ($uid > 0 && $owner && $uid === (int) $owner->id()) {
+    return ['member', $owner->getDisplayName()];
+  }
+  if ($uid > 0) {
+    return ['staff', $account->getDisplayName()];
+  }
+
+  $audience = _appointment_notifications_cancel_audience();
+  if ($audience === 'host') {
+    return ['facilitator', $host ? $host->getDisplayName() : ''];
+  }
+  if ($audience === 'member') {
+    return ['member', $owner ? $owner->getDisplayName() : ''];
+  }
+  return ['system', ''];
+}
+
+/**
+ * Gets or sets the audience of the cancel link being processed.
+ */
+function _appointment_notifications_cancel_audience(?string $audience = NULL): string {
+  $current = &drupal_static(__FUNCTION__, '');
+  if ($audience !== NULL) {
+    $current = $audience;
+  }
+  return $current;
 }
 
 /**

@@ -133,6 +133,9 @@ final class CancelAppointmentByLinkForm extends ConfirmFormBase {
       }
     }
 
+    // Lets the presave hook record who cancelled when the link is used
+    // while logged out.
+    _appointment_notifications_cancel_audience($this->cancelAudience);
     if (_appointment_notifications_cancel_appointment($this->appointment)) {
       $recipient_labels = function_exists('_appointment_notifications_cancel_recipient_labels')
         ? _appointment_notifications_cancel_recipient_labels($this->appointment)
