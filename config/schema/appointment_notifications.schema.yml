@@ -65,3 +65,6 @@ appointment_notifications.settings:
     calendar_invites_enabled:
       type: boolean
       label: 'Enable Calendar Invite Attachments'
+    tool_offline_notice_enabled:
+      type: boolean
+      label: 'Email upcoming appointments when their tool goes out of service'

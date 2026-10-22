@@ -129,3 +129,4 @@ email_body_host_reminder: |
 email_logging: true
 development_mode: false
 calendar_invites_enabled: true
+tool_offline_notice_enabled: true

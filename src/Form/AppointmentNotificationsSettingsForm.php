@@ -273,6 +273,13 @@ class AppointmentNotificationsSettingsForm extends ConfigFormBase {
       '#description' => $this->t('When enabled, `.ics` files are attached to initial scheduling emails and their cancellations.'),
     ];
 
+    $form['tool_offline_notice_enabled'] = [
+      '#type' => 'checkbox',
+      '#title' => $this->t('Tell upcoming appointments when their tool goes out of service'),
+      '#default_value' => $config->get('tool_offline_notice_enabled') ?? TRUE,
+      '#description' => $this->t('When a tool goes from usable to Offline, Out of Service or Gone, everyone on a scheduled appointment in the next @days days that needs the tool\'s required badge gets an FYI email. The appointment itself is not changed.', ['@days' => APPOINTMENT_NOTIFICATIONS_TOOL_NOTICE_DAYS]),
+    ];
+
     $form['email_logging'] = [
       '#type' => 'checkbox',
       '#title' => $this->t('Enable Email Logging'),
@@ -324,6 +331,7 @@ class AppointmentNotificationsSettingsForm extends ConfigFormBase {
       ->set('email_subject_host_reminder', $form_state->getValue(['reminder', 'email_subject_host_reminder']))
       ->set('email_body_host_reminder', $form_state->getValue(['reminder', 'email_body_host_reminder']))
       ->set('calendar_invites_enabled', $form_state->getValue(['calendar_invites', 'calendar_invites_enabled']))
+      ->set('tool_offline_notice_enabled', (bool) $form_state->getValue('tool_offline_notice_enabled'))
       ->set('email_logging', $form_state->getValue('email_logging'))
       ->set('development_mode', $form_state->getValue('development_mode'))
       ->save();

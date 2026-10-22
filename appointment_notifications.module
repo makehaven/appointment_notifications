@@ -27,6 +27,12 @@ function appointment_notifications_entity_insert(Drupal\Core\Entity\EntityInterf
  * Implements hook_entity_update().
  */
 function appointment_notifications_entity_update(Drupal\Core\Entity\EntityInterface $entity) {
+  // A tool going out of service affects the appointments booked to train on it.
+  if ($entity instanceof \Drupal\node\Entity\Node && $entity->bundle() === 'item') {
+    _appointment_notifications_tool_status_changed($entity);
+    return;
+  }
+
   // Ensure the entity is of type 'node' and the content type is 'appointment'.
   if ($entity instanceof \Drupal\node\Entity\Node && $entity->bundle() === 'appointment') {
     
@@ -1735,6 +1741,7 @@ function appointment_notifications_mail($key, &$message, $params) {
     case 'appointment_member_reminder':
     case 'appointment_host_reminder':
     case 'appointment_rebooked':
+    case 'appointment_tool_offline':
       $message['subject'] = $params['subject'];
       $message['body'][] = $params['message'];
       if (!empty($params['attachments'])) {
@@ -1806,4 +1813,313 @@ function _appointment_notifications_notify_slack(\Drupal\node\NodeInterface $nod
     $slack->sendMessageToUser($host, (string) $msg);
     $slack->sendMessageToUser($member, (string) $msg);
   }
+}
+
+/**
+ * Item statuses members can still use, when asset_status is not installed.
+ *
+ * Mirrors \Drupal\asset_status\Service\AssetAvailability::USABLE_STATUSES.
+ */
+const APPOINTMENT_NOTIFICATIONS_USABLE_TOOL_STATUSES = [
+  'Operational',
+  'Reported Concern',
+  'Degraded',
+];
+
+/**
+ * How far ahead to look for appointments when a tool goes out of service.
+ */
+const APPOINTMENT_NOTIFICATIONS_TOOL_NOTICE_DAYS = 60;
+
+/**
+ * Whether an item status term means members can use the tool.
+ *
+ * No status at all counts as usable: nothing was announced about the tool.
+ */
+function _appointment_notifications_tool_status_is_usable(?\Drupal\taxonomy\TermInterface $term): bool {
+  if (!$term) {
+    return TRUE;
+  }
+  if (\Drupal::hasService('asset_status.availability')) {
+    return \Drupal::service('asset_status.availability')->isUsable($term);
+  }
+  return in_array($term->label(), APPOINTMENT_NOTIFICATIONS_USABLE_TOOL_STATUSES, TRUE);
+}
+
+/**
+ * Decides whether a status change took a tool out of service.
+ *
+ * Only the usable → unusable edge counts, so a tool moving from Offline to
+ * Out of Service (or being saved twice) does not send a second notice.
+ */
+function _appointment_notifications_tool_went_down(?\Drupal\taxonomy\TermInterface $old, ?\Drupal\taxonomy\TermInterface $new): bool {
+  if (!$new) {
+    return FALSE;
+  }
+  return _appointment_notifications_tool_status_is_usable($old) && !_appointment_notifications_tool_status_is_usable($new);
+}
+
+/**
+ * Sends an FYI to upcoming appointments when their tool goes out of service.
+ */
+function _appointment_notifications_tool_status_changed(Node $tool): void {
+  if (!$tool->hasField('field_item_status') || !isset($tool->original)) {
+    return;
+  }
+  $config = \Drupal::config('appointment_notifications.settings');
+  if ($config->get('tool_offline_notice_enabled') === FALSE) {
+    return;
+  }
+
+  $old = $tool->original->get('field_item_status')->entity;
+  $new = $tool->get('field_item_status')->entity;
+  if (!_appointment_notifications_tool_went_down($old, $new)) {
+    return;
+  }
+
+  $badge_ids = _appointment_notifications_tool_badge_ids($tool);
+  if (!$badge_ids) {
+    return;
+  }
+
+  $appointments = _appointment_notifications_upcoming_appointments_for_badges($badge_ids);
+  if (!$appointments) {
+    return;
+  }
+
+  // A machine going down can take its tool's rolled-up status down with it,
+  // which saves the tool too; one outage gets one notice per appointment.
+  $state = \Drupal::state();
+  $now = \Drupal::time()->getRequestTime();
+  $sent = array_filter(
+    $state->get('appointment_notifications.sent.tool_offline', []),
+    static fn ($at) => $at > $now - 86400,
+  );
+  $root = (int) $tool->id();
+  if (\Drupal::hasService('asset_status.units') && ($parent = \Drupal::service('asset_status.units')->getParent($tool))) {
+    $root = (int) $parent->id();
+  }
+
+  $others = _appointment_notifications_other_usable_tools($badge_ids, $tool);
+  foreach ($appointments as $appointment) {
+    $key = $appointment->id() . ':' . $root;
+    if (isset($sent[$key])) {
+      continue;
+    }
+    if (_appointment_notifications_send_tool_offline_notice($appointment, $tool, $new, $others) > 0) {
+      $sent[$key] = $now;
+    }
+  }
+  $state->set('appointment_notifications.sent.tool_offline', $sent);
+}
+
+/**
+ * The badges an appointment for this tool would carry: its required badges.
+ *
+ * Optional badges are left out; they are shared across many tools. A machine
+ * of a multi-unit tool carries no badge of its own, so its tool's are used.
+ *
+ * @return int[]
+ *   Badge term IDs.
+ */
+function _appointment_notifications_tool_badge_ids(Node $tool): array {
+  $ids = [];
+  if ($tool->hasField('field_member_badges')) {
+    foreach ($tool->get('field_member_badges')->getValue() as $item) {
+      if (!empty($item['target_id'])) {
+        $ids[] = (int) $item['target_id'];
+      }
+    }
+  }
+  if (!$ids && \Drupal::hasService('asset_status.units')) {
+    $parent = \Drupal::service('asset_status.units')->getParent($tool);
+    if ($parent instanceof Node && $parent->id() !== $tool->id()) {
+      return _appointment_notifications_tool_badge_ids($parent);
+    }
+  }
+  return array_values(array_unique($ids));
+}
+
+/**
+ * Scheduled appointments in the coming weeks that need any of these badges.
+ *
+ * @param int[] $badge_ids
+ *   Badge term IDs.
+ *
+ * @return \Drupal\node\Entity\Node[]
+ *   Appointments, keyed by node ID.
+ */
+function _appointment_notifications_upcoming_appointments_for_badges(array $badge_ids): array {
+  $now = \Drupal::time()->getRequestTime();
+  $horizon = $now + APPOINTMENT_NOTIFICATIONS_TOOL_NOTICE_DAYS * 86400;
+  $site_timezone = new \DateTimeZone(\Drupal::config('system.date')->get('timezone.default') ?: 'UTC');
+  $today = (new \DateTimeImmutable('@' . $now))->setTimezone($site_timezone)->format('Y-m-d');
+  $last_day = (new \DateTimeImmutable('@' . $horizon))->setTimezone($site_timezone)->format('Y-m-d');
+
+  $base = static fn () => \Drupal::entityQuery('node')
+    ->accessCheck(FALSE)
+    ->condition('type', 'appointment')
+    ->condition('status', 1)
+    ->condition('field_appointment_status', 'scheduled')
+    ->condition('field_appointment_badges', $badge_ids, 'IN');
+
+  // Timerange is the source of truth; the date field catches older bookings.
+  $by_range = $base()
+    ->condition('field_appointment_timerange.value', $now, '>=')
+    ->condition('field_appointment_timerange.value', $horizon, '<=')
+    ->execute();
+  $by_date = $base()
+    ->notExists('field_appointment_timerange')
+    ->condition('field_appointment_date', $today, '>=')
+    ->condition('field_appointment_date', $last_day, '<=')
+    ->execute();
+
+  $nids = array_unique(array_merge(array_values($by_range), array_values($by_date)));
+  return $nids ? Node::loadMultiple($nids) : [];
+}
+
+/**
+ * Other tools that need the same badge and can still be used.
+ *
+ * Lets the notice say "the X is still available" when, for example, one of
+ * two machines covered by a badge goes down.
+ *
+ * @return string[]
+ *   Tool titles.
+ */
+function _appointment_notifications_other_usable_tools(array $badge_ids, Node $tool): array {
+  // A machine's own tool is not "another tool": its status follows the
+  // machine. Its sibling machines are, though they carry no badge themselves.
+  $titles = [];
+  $exclude = [(int) $tool->id()];
+  if (\Drupal::hasService('asset_status.units')) {
+    $units = \Drupal::service('asset_status.units');
+    $parent = $units->getParent($tool);
+    if ($parent) {
+      $exclude[] = (int) $parent->id();
+      foreach ($units->getUnits($parent) as $sibling) {
+        if ((int) $sibling->id() !== (int) $tool->id() && $units->isUsable($sibling)) {
+          $titles[] = $units->displayTitle($sibling);
+        }
+      }
+    }
+  }
+  $nids = \Drupal::entityQuery('node')
+    ->accessCheck(FALSE)
+    ->condition('type', 'item')
+    ->condition('status', 1)
+    ->condition('field_member_badges', $badge_ids, 'IN')
+    ->condition('nid', $exclude, 'NOT IN')
+    ->execute();
+
+  foreach (Node::loadMultiple($nids) as $other) {
+    $status = $other->hasField('field_item_status') ? $other->get('field_item_status')->entity : NULL;
+    if ($status && _appointment_notifications_tool_status_is_usable($status)) {
+      $titles[] = $other->label();
+    }
+  }
+  sort($titles);
+  return $titles;
+}
+
+/**
+ * Everyone on an appointment: who booked it, who joined, and the facilitator.
+ *
+ * @return \Drupal\user\UserInterface[]
+ *   Active accounts with an email address, keyed by user ID.
+ */
+function _appointment_notifications_appointment_people(Node $appointment): array {
+  $people = [];
+  $candidates = [$appointment->getOwner()];
+  foreach (['field_appointment_attendees', 'field_appointment_host'] as $field) {
+    if ($appointment->hasField($field)) {
+      foreach ($appointment->get($field)->referencedEntities() as $account) {
+        $candidates[] = $account;
+      }
+    }
+  }
+  foreach ($candidates as $account) {
+    if ($account instanceof \Drupal\user\UserInterface && $account->isActive() && $account->getEmail()) {
+      $people[$account->id()] = $account;
+    }
+  }
+  return $people;
+}
+
+/**
+ * Emails everyone on one appointment that its tool is out of service.
+ *
+ * @return int
+ *   Number of emails sent (or prepared, in development mode).
+ */
+function _appointment_notifications_send_tool_offline_notice(Node $appointment, Node $tool, \Drupal\taxonomy\TermInterface $status, array $other_tools): int {
+  $config = \Drupal::config('appointment_notifications.settings');
+  $mail_manager = \Drupal::service('plugin.manager.mail');
+  $sender = _appointment_notifications_effective_sender();
+  $schedule = _appointment_notifications_get_schedule_details($appointment);
+
+  $lines = [
+    '@tool was just marked @status on the website. You have an appointment coming up that uses it:',
+    '',
+    '@title',
+    '@date at @time',
+    '@link',
+    '',
+  ];
+  if ($other_tools) {
+    $lines[] = 'Still available with the same badge: @others.';
+    $lines[] = '';
+  }
+  $lines[] = 'The appointment has not been changed or canceled. Everyone on it got this note, so you can decide together whether to go ahead, use another tool, or reschedule.';
+  $lines[] = '';
+  $lines[] = 'Tool status: @tool_link';
+
+  $replacements = [
+    '@tool' => $tool->label(),
+    '@status' => $status->label(),
+    '@title' => $appointment->getTitle(),
+    '@date' => $schedule['date'],
+    '@time' => $schedule['time'],
+    '@link' => $appointment->toUrl('canonical', ['absolute' => TRUE])->toString(),
+    '@tool_link' => $tool->toUrl('canonical', ['absolute' => TRUE])->toString(),
+    '@others' => implode(', ', $other_tools),
+  ];
+  $subject = strtr('@tool is @status: your appointment on @date', $replacements);
+  $body_template = implode("\n", $lines);
+
+  $sent = 0;
+  foreach (_appointment_notifications_appointment_people($appointment) as $account) {
+    $body = 'Hi ' . ($account->getDisplayName() ?: 'there') . ",\n\n" . strtr($body_template, $replacements);
+
+    if ($config->get('email_logging')) {
+      \Drupal::logger('appointment_notifications')->notice('Tool offline notice for appointment @nid to @recipient. Body: @body', [
+        '@nid' => $appointment->id(),
+        '@recipient' => $account->getEmail(),
+        '@body' => $body,
+      ]);
+    }
+    if ($config->get('development_mode')) {
+      $sent++;
+      continue;
+    }
+
+    $result = $mail_manager->mail('appointment_notifications', 'appointment_tool_offline', $account->getEmail(), $account->getPreferredLangcode(), ['subject' => $subject, 'message' => $body], $sender);
+    if (!empty($result['result'])) {
+      $sent++;
+    }
+    else {
+      \Drupal::logger('appointment_notifications')->error('Failed to send tool offline notice for appointment @nid to @recipient', [
+        '@nid' => $appointment->id(),
+        '@recipient' => $account->getEmail(),
+      ]);
+    }
+  }
+
+  \Drupal::logger('appointment_notifications')->notice('@tool marked @status: sent @count notice(s) for appointment @nid.', [
+    '@tool' => $tool->label(),
+    '@status' => $status->label(),
+    '@count' => $sent,
+    '@nid' => $appointment->id(),
+  ]);
+  return $sent;
 }
