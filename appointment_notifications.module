@@ -861,7 +861,7 @@ function _appointment_notifications_send_rebooked_email(Node $node, \Drupal\user
   if ($promoted_user->getEmail()) {
     $subject = sprintf('You are now the primary contact for "%s"', $title);
     $body = sprintf(
-      "Good news - your session is still happening.\n\n" .
+      "Your session is still on.\n\n" .
       "%s, who originally booked \"%s\" on %s, has cancelled. Because you had joined, the session is still on and you are now the primary contact.\n\n" .
       "View the appointment: %s\n\n" .
       "If you can no longer attend, please cancel from the appointment page so the facilitator knows.",
@@ -881,7 +881,7 @@ function _appointment_notifications_send_rebooked_email(Node $node, \Drupal\user
   if ($host && method_exists($host, 'getEmail') && $host->getEmail()) {
     $subject = sprintf('Booking transfer for "%s" - session still on', $title);
     $body = sprintf(
-      "Heads up: %s cancelled their booking for \"%s\" on %s.\n\n" .
+      "%s cancelled their booking for \"%s\" on %s.\n\n" .
       "Because another member had joined, the session is still scheduled and %s is now the primary contact.\n\n" .
       "View the appointment: %s",
       $former_owner_name,
